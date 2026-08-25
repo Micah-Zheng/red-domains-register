@@ -1,0 +1,78 @@
+# 阶段 ②：AI 分流 + 贴评论。持有 AI 凭据与写权限，但绝不检出 PR 代码。
+#
+# 用 workflow_run 而非 pull_request_target 来获得写权限：workflow_run 在主干
+# 上下文运行、能拿 secrets，但它只消费阶段①产出的 artifact，从不 checkout PR。
+# 差别在于攻击面 —— pull_request_target + checkout 会执行 PR 代码，
+# workflow_run + artifact 只读取数据。
+#
+# AI 的权限边界（PLAN §6.3）：只能降级，不能提权。
+#   · 阶段① 判 REJECT → 终局，不问 AI
+#   · 阶段① 判 PASS  → 问 AI，AI 可下调为人工复核
+#   · AI 超时/异常/输出不合 schema → fail-closed 转人工，不放行
+# 因为 description 是提交者 100% 可控的自由文本，把放行权交给它等于把合并权
+# 交给 prompt injection。
+
+name: 02 · AI 分流
+
+on:
+  workflow_run:
+    workflows: ['01 · 硬规则校验']
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write     # 贴评论、打标签
+  issues: write
+
+concurrency:
+  group: triage-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event.workflow_run.event == 'pull_request'
+    steps:
+      # 只检出主干的脚本，不含任何 PR 内容。ref 显式钉在触发时的 main。
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # 取阶段①的 report.json。它是 PR 内容进入本段的唯一通道，且是我们自己
+      # 生成的结构化 JSON，不是 PR 里的文件。
+      - name: 下载校验报告
+        uses: actions/download-artifact@v4
+        with:
+          name: validation-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: incoming
+
+      - name: AI 分流
+        env:
+          # 只给 AI 凭据。CF/Resend 在本段不存在 —— 即使 AI 被注入完全劫持，
+          # 它能造成的最坏后果是给出错误建议，而错误建议只能导致转人工。
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REPORT_PATH: incoming/report.json
+          TRIAGE_OUT: triage.json
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          AI_TIMEOUT_MS: '60000'
+          AI_SHADOW_MODE: ${{ vars.AI_SHADOW_MODE || 'true' }}
+        run: node scripts/ai-triage.mjs
+
+      - name: 贴评论与标签
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPORT_PATH: incoming/report.json
+          TRIAGE_PATH: triage.json
+          REPO: ${{ github.repository }}
+        run: node scripts/pr-comment.mjs

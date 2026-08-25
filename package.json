@@ -4,11 +4,20 @@
   "private": true,
   "type": "module",
   "description": "tcp.red / udp.red 免费二级域名分发",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "validate": "node scripts/validate.mjs",
-    "test": "node --test scripts/",
-    "snapshot": "node scripts/snapshot-legacy.mjs"
+    "test": "node tests/validate.e2e.mjs && node tests/protect.e2e.mjs && node tests/workflow-boundary.e2e.mjs && node tests/report-contract.e2e.mjs && node tests/env-contract.e2e.mjs",
+    "test:validate": "node tests/validate.e2e.mjs",
+    "test:protect": "node tests/protect.e2e.mjs",
+    "snapshot": "node scripts/snapshot-legacy.mjs",
+    "sync:dry": "node scripts/cf-sync.mjs .",
+    "sync:apply": "node scripts/cf-sync.mjs . --apply",
+    "reconcile": "node scripts/reconcile.mjs .",
+    "test:boundary": "node tests/workflow-boundary.e2e.mjs",
+    "test:env": "node tests/env-contract.e2e.mjs"
   },
   "dependencies": {
     "ajv": "8.17.1",

@@ -220,6 +220,11 @@ const r_prefixAvailable = (ctx) => {
       'D2：一个前缀在两个 zone 上成对锁定，不拆分给不同的人');
   }
   if (e.zones.has(ctx.zone)) {
+    // changeKind 'M' = 编辑主干已有文件，这是 §7 允许的更新路径（换 IP、
+    // 换目标、改探测方式）。只有 'A'（新增）才算重复申请。
+    // 早期版本不区分二者，导致规则文案叫用户"直接编辑那个文件"，照做却仍被
+    // 拒 —— owner 想换服务器无路可走。
+    if (ctx.changeKind === 'M') return null;
     return reject('r_prefixAvailable',
       `你已经申请过 ${ctx.prefix}.${ctx.zone}`,
       '要改配置请直接编辑那个文件，不要重复新增');
@@ -568,6 +573,8 @@ export function runRules(input) {
     ...parsed,
     ajv,
     tier: deriveTier(input.doc),
+    // 未提供时按 'A'（新增）处理 —— 更严格的那一侧。
+    changeKind: input.changeKind ?? 'A',
     today: input.today ?? new Date().toISOString().slice(0, 10),
   };
 

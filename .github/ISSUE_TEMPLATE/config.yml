@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 申请子域名
+    url: https://github.com/Micah-Zheng/red-domains-register/blob/main/README.md
+    about: 申请走 Pull Request，不走 issue。请先读 README。

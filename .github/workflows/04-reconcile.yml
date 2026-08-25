@@ -1,0 +1,82 @@
+# 阶段 ④：每日对账。Git（事实源）↔ Cloudflare（实际生效）。
+#
+# 独立于下发存在：下发只处理「本次 PR 改了什么」，对账处理「两边是否还一致」。
+# 面板手工改动、下发中途失败、JSON 删了但下发没跑成 —— 这些只有对账能发现。
+#
+# 默认不删除。补齐缺失和纠正漂移是幂等的、以 Git 为准的操作，可以自动做；
+# 删除不可逆，需要运营者手动跑 workflow_dispatch 并显式勾选。
+
+name: 04 · 每日对账
+
+on:
+  schedule:
+    - cron: '17 3 * * *'      # UTC 03:17，避开整点的 API 高峰
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: '补齐缺失、纠正漂移'
+        type: boolean
+        default: false
+      allow_delete:
+        description: '删除孤儿记录（不可逆）'
+        type: boolean
+        default: false
+      max_delete:
+        description: '单次删除上限'
+        type: string
+        default: '5'
+
+permissions:
+  contents: read
+  issues: write               # 发现漂移时开 issue 提醒
+
+concurrency:
+  group: deploy-dns           # 与阶段③同组：对账与下发绝不同时动 CF。
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: 对账
+        id: recon
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          RECONCILE_REPORT: reconcile.json
+          RECONCILE_TIMESTAMP: ${{ github.event.repository.pushed_at }}
+          MAX_DELETE: ${{ inputs.max_delete || '5' }}
+        run: |
+          args="."
+          if [ "${{ inputs.apply }}" = "true" ]; then args="$args --apply"; fi
+          if [ "${{ inputs.allow_delete }}" = "true" ]; then args="$args --allow-delete"; fi
+          node scripts/reconcile.mjs $args
+        continue-on-error: true
+
+      - name: 上传对账报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconcile-report
+          path: reconcile.json
+          retention-days: 30
+
+      # 定时跑发现漂移时开 issue。孤儿记录仍在对外解析，属于需要人看到的事。
+      - name: 有漂移则提醒
+        if: always() && steps.recon.outcome == 'failure' && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/reconcile-issue.mjs reconcile.json

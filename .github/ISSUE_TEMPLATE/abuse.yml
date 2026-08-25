@@ -1,0 +1,25 @@
+name: 举报滥用
+description: 举报某个 *.tcp.red 子域名被用于钓鱼、恶意软件、垃圾邮件或仿冒
+labels: [abuse]
+body:
+  - type: input
+    id: domain
+    attributes:
+      label: 被举报的域名
+      placeholder: example.tcp.red
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 滥用类型
+      options: [钓鱼, 恶意软件分发, 垃圾邮件, 侵权仿冒, 其他]
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 证据
+      description: 截图、URL、邮件头都可以。不要在此粘贴恶意文件本体。
+    validations:
+      required: true

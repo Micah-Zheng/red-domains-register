@@ -1,1 +1,6 @@
-{ "description": "坏文件",, }
+{
+  "description": "回归测试用的固定申请，勿删",
+  "owner": { "github": "Micah-Zheng", "contact_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  "record": { "type": "CNAME", "value": "micahzheng.github.io" },
+  "check": { "mode": "http", "port": 443 }
+}

@@ -1,0 +1,81 @@
+# 阶段 ③：DNS 下发。唯一持有 CF_API_TOKEN / RESEND_API_KEY 的一段。
+#
+# 只在已合并的 main 上跑。到这一步 PR 已经过阶段①硬校验、阶段②分流、以及人工
+# 或规则批准的合并 —— 代码已是主干内容，不再是任意提交者可控的东西。
+#
+# 用 environment 包一层：GitHub 的 environment 可以配 required reviewers，
+# 让运营者在真正调用 CF API 前有一次人工闸门（上线初期建议开，稳定后再放开）。
+
+name: 03 · DNS 下发
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'domains/**'
+      - 'data/infra-records.json'
+      - 'scripts/derive.mjs'
+      - 'scripts/cf-sync.mjs'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只看计划不写入'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dns          # 绝不并发：两个下发同时跑会互相覆盖 diff 结果。
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-dns
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # 下发前先跑一遍测试。保护判定或推导逻辑被改坏时，宁可不下发。
+      - name: 回归测试
+        run: npm test
+
+      # 总是先打印计划。dry-run 无凭据也能跑，作用是让日志里留下「本次打算做什么」，
+      # 出问题时可对照。
+      - name: 下发计划（dry-run）
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: node scripts/cf-sync.mjs .
+
+      - name: 执行下发
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: node scripts/cf-sync.mjs . --apply
+
+      # 通知放在下发之后：先保证 DNS 真的生效，再告诉用户「可以用了」。
+      # 反过来会让用户收到邮件却解析不到，是最常见的体验投诉来源。
+      - name: 发送开通通知
+        if: success() && github.event_name == 'push'
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          CONTACT_STORE_TOKEN: ${{ secrets.CONTACT_STORE_TOKEN }}
+          # 侧存储地址显式传入：脚本里曾有个含字面量 OWNER 的兜底 URL，
+          # 404 后通知会静默全部跳过。用 vars 配置，未配则按本仓库 owner 推导。
+          CONTACT_STORE_URL: ${{ vars.CONTACT_STORE_URL }}
+          MAIL_FROM: ${{ vars.MAIL_FROM }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: node scripts/notify.mjs
+        continue-on-error: true    # 邮件失败不该让已成功的 DNS 下发显示为红。

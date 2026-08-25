@@ -1,0 +1,133 @@
+# 阶段 ⑤：/recheck —— 挑战失败后的自助重试。
+#
+# 为什么必须有这一段：r_ownershipChallenge 在挑战未通过时把申请压到 REVIEW，
+# 并告诉用户"放好 TXT/文件后回复 /recheck"。没有本 workflow 时那句话是空头
+# 承诺 —— 用户照做也不会有任何反应，申请永久卡在人工队列里。挑战本身依赖
+# DNS 传播与用户改配置，首次失败是常态而非异常，所以自助重试是主路径。
+#
+# 安全约束与阶段②相同，但触发面更大：issue_comment 在主干上下文运行且带
+# secrets。因此本段**只检出 main**，PR 里的申请文件通过 GitHub API 按 head SHA
+# 单独取，绝不 checkout PR 代码、绝不在 PR 内容上执行任何东西。
+#
+# 权限边界：本段只重跑校验并更新评论/标签，不合并、不碰 CF、不发邮件。
+# 通过后仍需人工或既有规则批准合并 —— /recheck 不是提权通道。
+name: 05 · 挑战重试
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+concurrency:
+  # 同一 PR 的连续 /recheck 串行处理，避免两次校验交叉更新同一条评论。
+  group: recheck-${{ github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  recheck:
+    # 三个条件同时满足才跑：是 PR 下的评论、内容是 /recheck、且评论者是 PR 作者
+    # 或有仓库写权限的人。放开给任意人会让路人替他人触发校验刷 API 配额。
+    if: >
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/recheck') &&
+      (github.event.comment.user.login == github.event.issue.user.login ||
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # 只检出主干代码。校验逻辑必须来自 main，不能来自 PR ——
+      # 否则提交者改一行 validate.mjs 就能让自己的申请全绿。
+      - name: 检出主干
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --ignore-scripts
+
+      - name: 先回一个确认
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X POST \
+            "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content=eyes >/dev/null || true
+
+      # 取 PR 元信息：head SHA、base SHA、作者。用 API 而非 checkout。
+      - name: 读取 PR 元信息
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          json=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}")
+          for k in base_sha:.base.sha head_sha:.head.sha author:.user.login state:.state; do
+            printf '%s=%s\n' "${k%%:*}" "$(printf '%s' "$json" | jq -r "${k#*:}")" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: 已关闭的 PR 不再校验
+        if: steps.pr.outputs.state != 'open'
+        run: |
+          echo "PR 已 ${{ steps.pr.outputs.state }}，跳过。"
+          exit 0
+
+      # 把 PR 里改动的申请文件按 head SHA 取到工作区。只接受 domains/ 下的 .json，
+      # 其它路径一律忽略 —— PR 不能借 /recheck 把任意文件写进主干工作区。
+      - name: 取回申请文件
+        if: steps.pr.outputs.state == 'open'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/files" \
+            --jq '.[] | select(.status != "removed") | .filename' > changed.txt
+          : > fetched.txt
+          while IFS= read -r f; do
+            case "$f" in
+              domains/*/*.json) ;;
+              *) echo "忽略非申请文件：$f"; continue ;;
+            esac
+            case "$f" in *..*) echo "路径可疑，忽略：$f"; continue ;; esac
+            mkdir -p "$(dirname "$f")"
+            gh api "repos/${{ github.repository }}/contents/${f}?ref=${HEAD_SHA}" \
+              -H 'accept: application/vnd.github.raw' > "$f"
+            echo "$f" >> fetched.txt
+            echo "已取回 $f"
+          done < changed.txt
+          test -s fetched.txt || { echo "PR 内无申请文件，无需校验。"; exit 0; }
+
+      - name: 重跑校验
+        if: steps.pr.outputs.state == 'open'
+        env:
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          PR_AUTHOR: ${{ steps.pr.outputs.author }}
+          CHANGED_FILES: changed.txt
+          REPORT_PATH: report.json
+          CHALLENGE_SALT: ${{ vars.CHALLENGE_SALT }}
+        run: node scripts/ci-validate.mjs
+
+      # 重试路径不问 AI：AI 只能降级，而这里要判断的是"挑战是否已通过"这一
+      # 确定性事实。省掉一次 AI 调用，也避免重试被用来反复刷模型配额。
+      # 造一个中性 triage 让评论渲染复用阶段②的同一份代码。
+      - name: 合成中性分流结果
+        if: steps.pr.outputs.state == 'open'
+        run: |
+          printf '%s' '{"decision":"NEUTRAL","reason":"/recheck 重试，未调用 AI","shadow":false}' > triage.json
+
+      - name: 更新 PR 评论与标签
+        if: always() && steps.pr.outputs.state == 'open'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPORT_PATH: report.json
+          TRIAGE_PATH: triage.json
+          REPO: ${{ github.repository }}
+        run: node scripts/pr-comment.mjs

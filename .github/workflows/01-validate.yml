@@ -1,0 +1,70 @@
+# 阶段 ①：硬规则校验。无凭据，可安全 checkout PR 代码。
+#
+# 事件选择是本文件最重要的决定：pull_request（不是 pull_request_target）。
+# fork 的 pull_request 事件里 secrets 全为空、GITHUB_TOKEN 只读，因此即便 PR
+# 内含恶意脚本也无凭据可偷。改成 pull_request_target 会让 PR 可控代码在带全部
+# secrets 的主干上下文里运行 —— 那是经典 pwn request，提交者能直接读走
+# CF_API_TOKEN 并接管整个 zone。
+#
+# 本段不贴评论也不打标签（那需要写权限），只产出 report.json 交给阶段 ②。
+
+name: 01 · 硬规则校验
+
+on:
+  pull_request:
+    paths:
+      - 'domains/**'
+
+permissions:
+  contents: read          # 只读。写权限一律留给阶段 ②/③。
+
+concurrency:
+  group: validate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出 PR 代码
+        uses: actions/checkout@v4
+        with:
+          # 需要 base 分支来算 diff，判断这个 PR 到底改了哪些申请文件。
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      # 依赖安装用 ci 而非 install：锁文件即事实，避免 PR 通过改 package.json
+      # 引入任意包。--ignore-scripts 关掉安装期钩子 —— 本段虽无凭据，但仍是
+      # 攻击者能执行代码的入口，没必要留着。
+      - name: 安装依赖
+        run: npm ci --ignore-scripts
+
+      - name: 校验申请文件
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPORT_PATH: report.json
+          CHALLENGE_SALT: ${{ vars.CHALLENGE_SALT }}
+        run: node scripts/ci-validate.mjs
+
+      # 单元测试同跑：推导逻辑或保护判定被 PR 改坏时，这里就该红。
+      - name: 回归测试
+        run: npm test
+
+      # report.json 里只有判定结论与公开信息，不含 PII —— contact_hash 是哈希，
+      # 明文邮箱从不进公开仓库（PLAN §4）。
+      - name: 上传校验报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: report.json
+          retention-days: 7

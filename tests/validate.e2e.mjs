@@ -8,14 +8,14 @@ const meta = { accountAgeDays: 400, publicRepos: 5, followers: 3, prCount24h: 1,
 
 const base = (o = {}) => ({
   description: '个人博客，Hugo 静态站',
-  owner: { github: 'micahzheng', contact_hash: HASH },
+  owner: { github: 'Micah-Zheng', contact_hash: HASH },
   record: { type: 'CNAME', value: 'micahzheng.github.io' },
   check: { mode: 'http', port: 443 },
   ...o,
 });
 
 const run = (doc, over = {}) => runRules({
-  filePath: 'domains/tcp.red/myblog.json', doc, actor: 'micahzheng',
+  filePath: 'domains/tcp.red/myblog.json', doc, actor: 'Micah-Zheng',
   changedFiles: ['domains/tcp.red/myblog.json'], state, actorMeta: meta,
   challengeVerified: true, today: '2026-08-25', ...over,
 });
@@ -31,7 +31,7 @@ const cases = [
   // —— 所有权与身份
   ['挑战未通过', run(base({ record: { type: 'CNAME', value: 'self-hosted.example.com' } }), { challengeVerified: false }), 'REVIEW', 'A'],
   ['owner 与 actor 不符', run(base({ owner: { github: 'someoneelse', contact_hash: HASH } })), 'REJECT', 'A'],
-  ['明文邮箱冒充 hash', run(base({ owner: { github: 'micahzheng', contact_hash: 'me@example.com' } })), 'REJECT', 'A'],
+  ['明文邮箱冒充 hash', run(base({ owner: { github: 'Micah-Zheng', contact_hash: 'me@example.com' } })), 'REJECT', 'A'],
 
   // —— 目标地址
   ['私网 IP 192.168', run(base({ proxied: false, record: { type: 'A', value: '192.168.1.10' }, check: { mode: 'tcp', port: 8080 } })), 'REJECT', 'B'],
@@ -53,6 +53,17 @@ const cases = [
   // —— 账号信誉与速率
   ['新账号 3 天', run(base(), { actorMeta: { ...meta, accountAgeDays: 3 } }), 'REVIEW', 'A'],
   ['24h 内 5 个 PR', run(base(), { actorMeta: { ...meta, prCount24h: 5 } }), 'REVIEW', 'A'],
+
+  // —— 更新已有申请（§7 允许 owner 改自己的记录）
+  ['修改自己的记录 换目标', run(base({ record: { type: 'CNAME', value: 'micahzheng.pages.dev' } }),
+    { filePath: 'domains/tcp.red/smoketest.json', changedFiles: ['domains/tcp.red/smoketest.json'], changeKind: 'M' }),
+    'PASS', 'A'],
+  ['新增时前缀已被自己占用', run(base(),
+    { filePath: 'domains/tcp.red/smoketest.json', changedFiles: ['domains/tcp.red/smoketest.json'], changeKind: 'A' }),
+    'REJECT', 'A'],
+  ['改他人的文件', run(base({ owner: { github: 'someoneelse', contact_hash: HASH } }),
+    { filePath: 'domains/tcp.red/smoketest.json', changedFiles: ['domains/tcp.red/smoketest.json'], changeKind: 'M' }),
+    'REJECT', 'A'],
 
   // —— PR 边界
   ['夹带脚本文件', run(base(), { changedFiles: ['domains/tcp.red/myblog.json', 'scripts/cf-sync.mjs'] }), 'REJECT', 'A'],

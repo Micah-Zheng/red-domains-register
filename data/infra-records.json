@@ -169,7 +169,7 @@
       "$comment": "独立发信子域 notify.tcp.red 的全部记录（MX / TXT / CNAME 跟踪域等，Resend 自动创建）。用途是把用户滥用导致的信誉损失隔离在子域外。"
     },
     {
-      "name": "notify.**",
+      "name": "**.notify",
       "type": "*",
       "match": "wildcard",
       "zones": [
@@ -179,7 +179,7 @@
       "managed_by": "provider",
       "owner": "Resend",
       "reference": "PLAN.md §10",
-      "$comment": "notify.tcp.red 之下的服务商记录（send.notify、bounce.notify、DKIM selector 等）。"
+      "$comment": "notify.tcp.red 之下的服务商记录（send.notify、bounce.notify、<selector>._domainkey.notify 等，Resend 自动创建）。注意通配方向：DNS 子标签在左侧，故为 **.notify 而非 notify.** —— 写反会让全部发信记录漏保护，对账时被判为孤儿删除，通知邮件直接中断。"
     },
     {
       "name": "@",
