@@ -63,7 +63,28 @@ export function deriveRecords({ prefix, zone, doc }) {
   // 所以这条 CAA 通常挡的是用户并不使用的名字，无害。但若用户日后在同前缀上
   // 加 A/AAAA 跑 HTTPS，就会被自己的 CAA 挡住签发 —— 那时应改声明 tls 转 C 档。
   // 保守方向（默认挡住）是对的：漏挡会静默耗尽共享的 LE 配额。
-  if (tier === 'A' || tier === 'B') {
+  //
+  // **主记录是 CNAME 时绝不下发同名 CAA。** CNAME 不得与任何其它类型共存
+  // （RFC 1034 §3.6.2、RFC 2181 §10.1）。Cloudflare 的 API 不拦这种写入 ——
+  // 三条记录全部返回 success:true、面板里也都在 —— 但权威解析层遇到冲突会
+  // 只应答 CAA，把 CNAME 静默丢弃。表现是：下发日志全绿、对账判定「已一致」、
+  // 而这个名字**根本不解析**。实测 micah-pages.tcp.red 与 smoketest.tcp.red
+  // 都因此完全不可用，删掉两条叶子 CAA 后当场恢复解析。
+  //
+  // 后果是 A 档（橙云，主记录恒为 CNAME）的叶子 deny-CAA 在 DNS 协议层面不可
+  // 实现，§8.4 档位表里那一行做不到。这类名字的签发策略改由 zone apex 的 CAA
+  // 承担：橙云记录被 CF 展平成 A，CA 在该名字上查 CAA 得 NODATA，按 RFC 8659
+  // 上溯到 apex。但 apex 必须放行 CF Universal SSL 可能用到的 CA（含
+  // letsencrypt.org），所以 A 档用户仍可走 HTTP-01 自签 —— §8.4 想防的「批量
+  // 注册刷证书抽干共享池」在 CAA 这一层已无手段，只剩 §6 的每账号注册配额。
+  // 这是已知缺口，不是可以靠调参数补上的东西，见 PLAN §8.4 的「DNS 层硬约束」。
+  //
+  // 灰云 CNAME（B 档）更彻底：CA 会跟随 CNAME 到目标名字上查 CAA（RFC 8659 §3），
+  // 我们在本 zone 内的任何 CAA 都管不到它。
+  //
+  // 主记录为 A / AAAA / SRV 时同名 CAA 合法，照常下发。
+  const mainIsCname = String(doc.record.type).toUpperCase() === 'CNAME';
+  if ((tier === 'A' || tier === 'B') && !mainIsCname) {
     for (const caa of CAA_DENY) {
       records.push({
         name: prefix, type: 'CAA', ttl: TTL_AUTO, data: { ...caa },

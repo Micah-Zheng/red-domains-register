@@ -29,8 +29,14 @@ function newlyAdded() {
   try {
     out = execFileSync('git', ['diff', '--name-status', '--diff-filter=A', before, after, '--', 'domains/'], { encoding: 'utf8' });
   } catch (e) {
-    console.log(`git diff 失败，跳过通知：${e.message}`);
-    return [];
+    // 绝不降级成「本次无新增申请」。这里失败最常见的原因是 checkout 浅克隆
+    // （fetch-depth 默认 1）导致 before SHA 在 runner 上不存在，git 报
+    // "fatal: bad object"。旧实现 catch 后 return []，日志只留一行「无新增申请，
+    // 无需通知」，于是**每一次**下发的开通邮件都被静默吞掉 —— 加上这一步的
+    // continue-on-error:true，整条通知链路可以长期全绿地什么都不做。
+    throw new Error(
+      `无法计算本次 push 的新增申请（${before}..${after}）：${e.message}\n`
+      + '若是 "bad object"：checkout 深度不够，03-deploy.yml 需要 fetch-depth: 0。');
   }
   return out.trim().split('\n').filter(Boolean)
     .map((l) => l.split('\t')[1]).filter((f) => f?.endsWith('.json'));
@@ -72,16 +78,28 @@ let sent = 0, skipped = 0;
 for (const f of files) {
   let app;
   try { app = JSON.parse(readFileSync(f, 'utf8')); } catch { console.log(`  跳过 ${f}（解析失败）`); skipped += 1; continue; }
-  const fqdn = `${app.prefix}.${app.zone ?? 'tcp.red'}`;
-  const hash = app.contact?.emailHash ?? app.emailHash;
-  if (!hash) { console.log(`  跳过 ${fqdn}（无 emailHash）`); skipped += 1; continue; }
+  // 前缀与 zone 只存在于路径 domains/<zone>/<prefix>.json 里，申请文件内没有
+  // 这两个字段（schema/domain.schema.json 的 properties 是 description / owner /
+  // record / proxied / ttl / check / tls）。旧实现读 app.prefix、app.zone、
+  // app.contact.emailHash、app.emailHash、app.target —— 五个字段 schema 里一个
+  // 都不存在，于是每条申请都停在「无 emailHash」，一封邮件也发不出去。
+  const m = /^domains\/([^/]+)\/([^/]+)\.json$/.exec(f);
+  if (!m) { console.log(`  跳过 ${f}（路径不是 domains/<zone>/<prefix>.json）`); skipped += 1; continue; }
+  const [, zone, prefix] = m;
+  const fqdn = `${prefix}.${zone}`;
+
+  // 侧存储的文件名是纯 64 位十六进制，不带 `sha256:` 前缀，须剥掉再去换地址。
+  const hash = String(app.owner?.contact_hash ?? '').replace(/^sha256:/, '');
+  if (!/^[0-9a-f]{64}$/.test(hash)) {
+    console.log(`  跳过 ${fqdn}（owner.contact_hash 缺失或格式不对）`); skipped += 1; continue;
+  }
 
   const to = await resolveEmail(hash);
   if (!to) { console.log(`  跳过 ${fqdn}（私有存储无此哈希，可能用户已请求删除）`); skipped += 1; continue; }
 
   const html = `<div style="font-family:system-ui,-apple-system,sans-serif;line-height:1.6;max-width:520px">
 <h2 style="margin:0 0 16px">${esc(fqdn)} 已开通</h2>
-<p>你申请的二级域名已生效，指向 <code>${esc(app.target ?? app.records?.[0]?.content)}</code>。</p>
+<p>你申请的二级域名已生效，指向 <code>${esc(app.record?.value)}</code>。</p>
 <p>DNS 在全球生效通常需要几分钟。如果暂时打不开，先等一会儿再试。</p>
 <p style="color:#666;font-size:14px">
 需要修改或注销，回到仓库提一个新的 PR 即可。<br>
