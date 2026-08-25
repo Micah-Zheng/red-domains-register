@@ -61,7 +61,8 @@ jobs:
         env:
           # 只给 AI 凭据。CF/Resend 在本段不存在 —— 即使 AI 被注入完全劫持，
           # 它能造成的最坏后果是给出错误建议，而错误建议只能导致转人工。
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
           REPORT_PATH: incoming/report.json
           TRIAGE_OUT: triage.json
           AI_MODEL: ${{ vars.AI_MODEL }}
