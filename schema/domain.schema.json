@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/micahzheng/red-domains-register/schema/domain.schema.json",
+  "title": "tcp.red / udp.red 子域名申请",
+  "$comment": "PLAN.md §5。additionalProperties: false 是有意的——未知字段一律拒绝，避免申请者以为某个拼错的字段生效了。四档（D7）不是显式字段，而是由 proxied / tls 组合推导：A=proxied true；B=proxied false 且无 tls；C=proxied false 且有 tls；D（经 CF 转发全端口 TCP/UDP）不受支持，无法表达。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["description", "owner", "record", "check"],
+
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "$comment": "允许编辑器补全用的相对路径引用，不参与校验。"
+    },
+
+    "description": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 200,
+      "pattern": "^[^\\u0000-\\u001f\\u007f\\u200b-\\u200f\\u2028\\u2029\\ufeff]+$",
+      "$comment": "5–200 字符。pattern 剥离控制字符与零宽字符（零宽字符是同形异义与视觉欺骗的常用载体）。校验器会先做 NFKC 归一化再套此规则。按 D1 不校验用途与 zone 的关系；按 D7 拒绝影音分发/网盘/大文件镜像意图——但那是语义判断，由 AI 分流阶段处理，schema 层管不了。"
+    },
+
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["github", "contact_hash"],
+      "properties": {
+        "github": {
+          "type": "string",
+          "pattern": "^[a-zA-Z\\d](?:[a-zA-Z\\d]|-(?=[a-zA-Z\\d])){0,38}$",
+          "$comment": "GitHub 用户名规则：≤39 字符，连字符不可起止或连续。校验器另有 r_ownerMatchesActor 断言其等于 PR actor——schema 无法知道 actor 是谁。"
+        },
+        "contact_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "$comment": "D3：明文邮箱绝不入公开仓。小写 hex 强制，避免同一邮箱因大小写产生两个哈希而绕过 r_quotaPerContact。"
+        }
+      }
+    },
+
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value"],
+      "properties": {
+        "type": {
+          "enum": ["A", "AAAA", "CNAME", "SRV"],
+          "$comment": "TXT 仅挑战用，不长期挂载；NS 不开放自助（委派后失去可见性与处置能力，而滥用后果仍由 tcp.red 承担）。"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "$comment": "SRV 专用。"
+        },
+        "weight": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "SRV" } }, "required": ["type"] },
+          "then": {
+            "required": ["type", "value", "priority", "weight", "port"],
+            "$comment": "SRV 的目标主机在 value，权重/优先级/端口缺一不可。"
+          },
+          "else": {
+            "not": { "anyOf": [
+              { "required": ["priority"] },
+              { "required": ["weight"] },
+              { "required": ["port"] }
+            ] },
+            "$comment": "非 SRV 记录带 SRV 字段说明申请者搞错了记录类型，静默忽略会让人以为端口生效了。"
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "A" } }, "required": ["type"] },
+          "then": { "properties": { "value": {
+            "format": "ipv4",
+            "pattern": "^(?!0\\.)(?!10\\.)(?!127\\.)(?!169\\.254\\.)(?!192\\.168\\.)(?!172\\.(?:1[6-9]|2\\d|3[01])\\.)(?!100\\.(?:6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.)(?!22[4-9]\\.)(?!2[3-5]\\d\\.)(?!255\\.255\\.255\\.255$)(?:\\d{1,3}\\.){3}\\d{1,3}$"
+          } } },
+          "$comment": "公网单播强制。负向断言按顺序排除：0/8、10/8、127/8、169.254/16、192.168/16、172.16-31/12、CGNAT 100.64/10、组播与保留高段 224+、广播地址。CGNAT 尤其重要——运营者自己的 Tailscale 节点就在 100.119.63.21，那类地址对申请者毫无意义却看着像公网 IP。数值范围（每段 ≤255）由 format: ipv4 兜住。"
+        },
+        {
+          "if": { "properties": { "type": { "const": "AAAA" } }, "required": ["type"] },
+          "then": { "properties": { "value": {
+            "format": "ipv6",
+            "pattern": "^(?!::1$)(?!::$)(?![fF][cCdD])(?![fF][eE]80:)(?![fF][fF])(?!2001:[dD][bB]8:)[0-9a-fA-F:]+$"
+          } } },
+          "$comment": "排除 ::1 回环、:: 未指定、fc00::/7 ULA、fe80::/10 链路本地、ff00::/8 组播、2001:db8::/32 文档段。IPv6 的完整合法性交给 format: ipv6，此处只做段位排除。"
+        },
+        {
+          "if": { "properties": { "type": { "const": "CNAME" } }, "required": ["type"] },
+          "then": { "properties": { "value": {
+            "pattern": "^(?!.*\\.(?:tcp|udp)\\.red\\.?$)(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\\.)+[A-Za-z]{2,63}\\.?$"
+          } } },
+          "$comment": "合法 FQDN，且负向断言拒绝指回 *.tcp.red / *.udp.red。指回本服务会造成解析环，也能被用来把别人的前缀套在自己的名下。r_noCnameLoop 会再查一遍——schema 只挡字面形态，查不出跨文件的间接环。"
+        }
+      ]
+    },
+
+    "proxied": {
+      "type": "boolean",
+      "default": true,
+      "$comment": "D7：橙云为推荐默认值，省略即 true（A 档）。不强制——B/C 档显式填 false。"
+    },
+
+    "ttl": {
+      "type": "integer",
+      "$comment": "省略时由下发脚本按档位取默认：proxied true → 1(auto)；false → 300。显式填值的合法范围见底部 allOf。"
+    },
+
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "enum": ["dns", "http", "tcp", "manual"],
+          "$comment": "D4：可达性探测由申请者显式声明，不由我们猜测。"
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "path": {
+          "type": "string",
+          "pattern": "^/[^\\s]*$",
+          "default": "/",
+          "maxLength": 200,
+          "$comment": "http 模式可选。必须以 / 起首，不含空白。"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 300,
+          "$comment": "mode: manual 必填，说明为何无法自动探测。r_manualCheckMode 会转人工核验 D4 的正当性。"
+        },
+        "expect_status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599,
+          "default": 200,
+          "$comment": "http 模式可选。默认 200。"
+        }
+      }
+    },
+
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "public_cert": {
+          "type": "boolean",
+          "$comment": "C 档标记：申请者自行签发公信证书。触发 §8.4 的 7 天滚动预算闸门，并放开该名字的 deny-CAA。"
+        },
+        "acme_dns_delegate": {
+          "type": "string",
+          "pattern": "^(?=.{1,253}$)(?:(?!-)[A-Za-z0-9-]{1,63}(?<!-)\\.)+[A-Za-z]{2,63}\\.?$",
+          "$comment": "追加下发 _acme-challenge.<前缀> CNAME <此值>，用于 DNS-01（通配证书，或 80/443 不通的场景）。"
+        }
+      },
+      "$comment": "仅 proxied: false 时有意义（见底部 allOf 的互斥断言）。省略即 B 档，默认写入 deny-CAA。minProperties: 1 拒绝空对象——空 tls 看着像声明了什么，实际什么都没声明。"
+    }
+  },
+
+  "allOf": [
+    {
+      "$comment": "D7 联动 ①：SRV 本就不经代理，proxied 必须为 false。省略 proxied 时默认 true，故 SRV 必须显式填 false——这是有意的摩擦，让申请者意识到 SRV 走的是灰云。",
+      "if": {
+        "properties": { "record": { "properties": { "type": { "const": "SRV" } }, "required": ["type"] } },
+        "required": ["record"]
+      },
+      "then": {
+        "required": ["proxied"],
+        "properties": { "proxied": { "const": false } }
+      }
+    },
+    {
+      "$comment": "§5 联动 ②：A/AAAA 不得用 mode: dns。指向自己 IP 的记录，DNS 查得到只证明我们写对了，证明不了那台机器活着——D4 要的是真实可达性。CNAME 则相反，dns 模式恰当（目标托管商自己会保证可用性）。",
+      "if": {
+        "properties": { "record": { "properties": { "type": { "enum": ["A", "AAAA"] } }, "required": ["type"] } },
+        "required": ["record"]
+      },
+      "then": {
+        "properties": { "check": { "properties": { "mode": { "not": { "const": "dns" } } } } }
+      }
+    },
+    {
+      "$comment": "§5 联动 ③：http / tcp 模式必须给出端口。缺 port 无法探测，静默跳过会让一个从未验证过的记录长期挂在线上。",
+      "if": {
+        "properties": { "check": { "properties": { "mode": { "enum": ["http", "tcp"] } }, "required": ["mode"] } },
+        "required": ["check"]
+      },
+      "then": {
+        "properties": { "check": { "required": ["port"] } }
+      }
+    },
+    {
+      "$comment": "§5 联动 ④：mode: manual 必须附理由，转人工核验 D4 的正当性。无理由的 manual 等于自助跳过全部探测。",
+      "if": {
+        "properties": { "check": { "properties": { "mode": { "const": "manual" } }, "required": ["mode"] } },
+        "required": ["check"]
+      },
+      "then": {
+        "properties": { "check": { "required": ["reason"] } }
+      }
+    },
+    {
+      "$comment": "§5 联动 ⑤：mode: tcp 仅 B/C 档（灰云）可用。橙云只代理 HTTP/HTTPS，裸 TCP 探测打到 CF 边缘而非源站，结果无意义。省略 proxied 即 true，故 tcp 模式必须显式 proxied: false。",
+      "if": {
+        "properties": { "check": { "properties": { "mode": { "const": "tcp" } }, "required": ["mode"] } },
+        "required": ["check"]
+      },
+      "then": {
+        "required": ["proxied"],
+        "properties": { "proxied": { "const": false } }
+      }
+    },
+    {
+      "$comment": "D7 联动 ⑥（核心）：proxied: true 时 check.port 必须是橙云支持端口。填其他端口即使记录成功下发也永远不可达——这正是初版『强制橙云』误杀 B 档用途的地方，故在 schema 层直接拒绝并把 B 档指出来，而不是让人上线后自己排查。同时 TTL 强制 auto(1)，因为橙云下 TTL 由 CF 接管，填别的值会造成『我设了 3600 但它是 300』的困惑。",
+      "if": {
+        "anyOf": [
+          { "properties": { "proxied": { "const": true } }, "required": ["proxied"] },
+          { "not": { "required": ["proxied"] } }
+        ]
+      },
+      "then": {
+        "properties": {
+          "check": {
+            "properties": {
+              "port": {
+                "enum": [80, 8080, 8880, 2052, 2082, 2086, 2095, 443, 2053, 2083, 2087, 2096, 8443]
+              }
+            }
+          },
+          "ttl": { "const": 1 },
+          "tls": false
+        },
+        "$comment": "tls: false 表示橙云档不得出现 tls 字段——A 档复用 CF 通配证书，自签证书既无必要也不生效，出现即说明申请者选错了档。"
+      },
+      "else": {
+        "properties": {
+          "ttl": { "type": "integer", "minimum": 60, "maximum": 86400 }
+        },
+        "$comment": "灰云（B/C 档）端口不限（D7 的关键放开），TTL 允许 60–86400。"
+      }
+    },
+    {
+      "$comment": "D7 联动 ⑦：C 档（tls.acme_dns_delegate）与 http 探测的端口无关，但若申请者声明了 public_cert 却把探测端口设成 80，说明其 HTTPS 尚未就绪。此处不拒绝——C 档拿证书本身需要时间（§11 1.2 的三条路），探测先走 80 是合理的过渡态。仅作说明，不加约束。"
+    }
+  ],
+
+  "examples": [
+    {
+      "$comment": "A 档：橙云 Web，最常见，也是推荐默认。",
+      "description": "Static docs site, no specific protocol requirement",
+      "owner": {
+        "github": "micahzheng",
+        "contact_hash": "sha256:9f2c8a0000000000000000000000000000000000000000000000000000000e41b"
+      },
+      "record": { "type": "CNAME", "value": "micahzheng.github.io" },
+      "proxied": true,
+      "check": { "mode": "dns" }
+    },
+    {
+      "$comment": "B 档：灰云非 HTTP，任意端口。初版被误杀、实际覆盖多数用途的一档。",
+      "description": "Minecraft server for a small private friends group",
+      "owner": {
+        "github": "micahzheng",
+        "contact_hash": "sha256:9f2c8a0000000000000000000000000000000000000000000000000000000e41b"
+      },
+      "record": { "type": "A", "value": "203.0.113.45" },
+      "proxied": false,
+      "ttl": 300,
+      "check": { "mode": "tcp", "port": 25565 }
+    },
+    {
+      "$comment": "C 档：灰云 + 自签公信证书，DNS-01 委派。触发 §8.4 预算闸门。",
+      "description": "Self-hosted Nextcloud instance with own Let's Encrypt certificate",
+      "owner": {
+        "github": "micahzheng",
+        "contact_hash": "sha256:9f2c8a0000000000000000000000000000000000000000000000000000000e41b"
+      },
+      "record": { "type": "A", "value": "203.0.113.46" },
+      "proxied": false,
+      "check": { "mode": "http", "port": 443, "path": "/status.php" },
+      "tls": { "public_cert": true, "acme_dns_delegate": "myapp.acme.example.com" }
+    }
+  ]
+}

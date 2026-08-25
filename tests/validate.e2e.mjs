@@ -1,0 +1,80 @@
+// 端到端回归：真实 data/ 状态 + 真实 schema，覆盖四档判定与短路语义。
+// 跑法：node tests/validate.e2e.mjs
+import { runRules, loadRepoState } from '../scripts/validate.mjs';
+
+const state = loadRepoState();
+const HASH = 'sha256:' + 'a'.repeat(64);
+const meta = { accountAgeDays: 400, publicRepos: 5, followers: 3, prCount24h: 1, globalNew24h: 2 };
+
+const base = (o = {}) => ({
+  description: '个人博客，Hugo 静态站',
+  owner: { github: 'micahzheng', contact_hash: HASH },
+  record: { type: 'CNAME', value: 'micahzheng.github.io' },
+  check: { mode: 'http', port: 443 },
+  ...o,
+});
+
+const run = (doc, over = {}) => runRules({
+  filePath: 'domains/tcp.red/myblog.json', doc, actor: 'micahzheng',
+  changedFiles: ['domains/tcp.red/myblog.json'], state, actorMeta: meta,
+  challengeVerified: true, today: '2026-08-25', ...over,
+});
+
+const cases = [
+  // —— 正常路径
+  ['A 档 白名单 CNAME + 挑战已过', run(base()), 'PASS', 'A'],
+  ['B 档 灰云 Minecraft', run(base({ proxied: false, record: { type: 'A', value: '203.0.114.9' }, check: { mode: 'tcp', port: 25565 }, description: '朋友的 Minecraft 服务器' })), 'REVIEW', 'B'],
+  ['C 档 ACME DNS-01 委派', run(base({ proxied: false, tls: { acme_dns_delegate: 'acme.example.com' }, record: { type: 'CNAME', value: 'app.fly.dev' }, check: { mode: 'http', port: 443 } })), 'REVIEW', 'C'],
+  ['C 档 自签公信证书', run(base({ proxied: false, tls: { public_cert: true }, record: { type: 'A', value: '203.0.114.9' }, check: { mode: 'http', port: 443 } })), 'REVIEW', 'C'],
+  ['manual 探测模式', run(base({ check: { mode: 'manual', reason: '服务仅在特定时段开放' } })), 'REVIEW', 'A'],
+
+  // —— 所有权与身份
+  ['挑战未通过', run(base({ record: { type: 'CNAME', value: 'self-hosted.example.com' } }), { challengeVerified: false }), 'REVIEW', 'A'],
+  ['owner 与 actor 不符', run(base({ owner: { github: 'someoneelse', contact_hash: HASH } })), 'REJECT', 'A'],
+  ['明文邮箱冒充 hash', run(base({ owner: { github: 'micahzheng', contact_hash: 'me@example.com' } })), 'REJECT', 'A'],
+
+  // —— 目标地址
+  ['私网 IP 192.168', run(base({ proxied: false, record: { type: 'A', value: '192.168.1.10' }, check: { mode: 'tcp', port: 8080 } })), 'REJECT', 'B'],
+  ['CGNAT 100.119', run(base({ proxied: false, record: { type: 'A', value: '100.119.5.5' }, check: { mode: 'tcp', port: 22 } })), 'REJECT', 'B'],
+  ['CNAME 指回自有 zone', run(base({ record: { type: 'CNAME', value: 'other.tcp.red' } })), 'REJECT', 'A'],
+
+  // —— 橙云与探测的一致性
+  ['橙云 + tcp 探测', run(base({ check: { mode: 'tcp', port: 25565 } })), 'REJECT', 'A'],
+  ['A 记录 + dns 探测', run(base({ proxied: false, record: { type: 'A', value: '203.0.114.9' }, check: { mode: 'dns' } })), 'REJECT', 'B'],
+
+  // —— 前缀池
+  ['保留词 api', run(base(), { filePath: 'domains/tcp.red/api.json' }), 'REJECT', 'A'],
+  ['3 字符短前缀', run(base(), { filePath: 'domains/tcp.red/abc.json' }), 'REJECT', 'A'],
+  ['非法路径', run(base(), { filePath: 'evil/x.json' }), 'REJECT', undefined],
+
+  // —— description
+  ['占位 description', run(base({ description: 'test site' })), 'REVIEW', 'A'],
+
+  // —— 账号信誉与速率
+  ['新账号 3 天', run(base(), { actorMeta: { ...meta, accountAgeDays: 3 } }), 'REVIEW', 'A'],
+  ['24h 内 5 个 PR', run(base(), { actorMeta: { ...meta, prCount24h: 5 } }), 'REVIEW', 'A'],
+
+  // —— PR 边界
+  ['夹带脚本文件', run(base(), { changedFiles: ['domains/tcp.red/myblog.json', 'scripts/cf-sync.mjs'] }), 'REJECT', 'A'],
+  ['一 PR 两个前缀', run(base(), { changedFiles: ['domains/tcp.red/a.json', 'domains/tcp.red/b.json'] }), 'REJECT', 'A'],
+];
+
+let pass = 0, fail = 0;
+for (const [name, rep, wantV, wantT] of cases) {
+  if (rep.verdict === wantV && rep.tier === wantT) { pass++; console.log(`  ok   ${name}`); }
+  else {
+    fail++;
+    console.log(`  FAIL ${name}`);
+    console.log(`       判定 ${rep.verdict} (期望 ${wantV}) / 档位 ${rep.tier} (期望 ${wantT})`);
+    for (const f of rep.findings) console.log(`       - ${f.rule}: ${f.verdict} — ${f.message}`);
+  }
+}
+
+// REJECT 应立即短路，不继续累积 findings
+const short = run(base({ owner: { github: 'x', contact_hash: 'bad' } }));
+const shortOk = short.findings.length === 1;
+if (!shortOk) fail++; else pass++;
+console.log(`  ${shortOk ? 'ok  ' : 'FAIL'} REJECT 后短路（findings=${short.findings.length}）`);
+
+console.log(`\n${pass}/${pass + fail} 通过`);
+process.exit(fail ? 1 : 0);

@@ -1,0 +1,44 @@
+{
+  "$comment": "免所有权挑战的托管商后缀（C5 的例外）。收录标准：该平台在绑定自定义域名时自己就要求验证所有权（DNS TXT、文件校验或平台内确认），因此 CNAME 指过去不构成悬空劫持风险——攻击者拿不到那个目标名下的资源。此表只免挑战，不免其他任何规则。指向表外目标一律走 C5 挑战流程。",
+  "version": 1,
+  "updated": "2026-08-25",
+  "match": {
+    "$comment": "消费方约定：对 record.value 做 NFKC → lowercase → 去尾部点，然后判断是否等于某条 suffix 或以 '.' + suffix 结尾。不做正则，不做子串匹配——子串匹配会让 evil-github.io.attacker.com 误命中。",
+    "normalize": ["nfkc", "lowercase", "strip_trailing_dot"],
+    "rule": "value === suffix || value.endsWith('.' + suffix)"
+  },
+  "suffixes": [
+    { "suffix": "github.io", "vendor": "GitHub Pages", "ownership": "仓库名即子域，绑定自定义域需仓库写权限" },
+    { "suffix": "gitlab.io", "vendor": "GitLab Pages", "ownership": "同上，需项目权限" },
+    { "suffix": "pages.dev", "vendor": "Cloudflare Pages", "ownership": "项目归属 CF 账号，自定义域需账号内验证" },
+    { "suffix": "workers.dev", "vendor": "Cloudflare Workers", "ownership": "同上" },
+    { "suffix": "vercel.app", "vendor": "Vercel", "ownership": "绑定自定义域要求 DNS 验证" },
+    { "suffix": "netlify.app", "vendor": "Netlify", "ownership": "同上" },
+    { "suffix": "netlify.com", "vendor": "Netlify（旧域）", "ownership": "同上" },
+    { "suffix": "render.com", "vendor": "Render", "ownership": "服务归属账号，自定义域需验证" },
+    { "suffix": "onrender.com", "vendor": "Render", "ownership": "同上" },
+    { "suffix": "fly.dev", "vendor": "Fly.io", "ownership": "应用名全局唯一且归属账号" },
+    { "suffix": "railway.app", "vendor": "Railway", "ownership": "同上" },
+    { "suffix": "koyeb.app", "vendor": "Koyeb", "ownership": "同上" },
+    { "suffix": "deno.dev", "vendor": "Deno Deploy", "ownership": "项目归属账号" },
+    { "suffix": "surge.sh", "vendor": "Surge", "ownership": "域名归属发布者账号" },
+    { "suffix": "readthedocs.io", "vendor": "Read the Docs", "ownership": "项目归属账号" },
+    { "suffix": "herokuapp.com", "vendor": "Heroku", "ownership": "应用名全局唯一且归属账号" },
+    { "suffix": "azurewebsites.net", "vendor": "Azure App Service", "ownership": "站点名全局唯一，自定义域需 TXT 验证" },
+    { "suffix": "cloudfront.net", "vendor": "AWS CloudFront", "ownership": "分配名随机且归属账号；自定义域需 ACM 证书" },
+    { "suffix": "notion.site", "vendor": "Notion", "ownership": "站点归属工作区" },
+    { "suffix": "webflow.io", "vendor": "Webflow", "ownership": "站点归属账号" },
+    { "suffix": "framer.app", "vendor": "Framer", "ownership": "同上" },
+    { "suffix": "ghost.io", "vendor": "Ghost(Pro)", "ownership": "同上" },
+    { "suffix": "bsky.network", "vendor": "Bluesky PDS", "ownership": "同上" }
+  ],
+  "excluded": {
+    "$comment": "刻意不收录的平台，以及原因。写下来是为了让后来者不必重新推导。",
+    "s3.amazonaws.com": "S3 桶名先到先得且无所有权验证——桶被删除后任何人可重建同名桶，这是悬空 CNAME 劫持最经典的载体",
+    "storage.googleapis.com": "同理，GCS 桶名全局先到先得",
+    "blob.core.windows.net": "同理，Azure Blob 容器名可被重建",
+    "elasticbeanstalk.com": "环境名在区域内先到先得，已知可被抢注",
+    "trafficmanager.net": "Azure Traffic Manager profile 名可被重建，历史劫持案例多",
+    "*.ngrok.io / *.trycloudflare.com": "临时隧道，地址短命且不代表稳定归属，指过去的记录很快变成悬空"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$comment": "前缀冷却名单。前缀被撤销或主动放弃后不立即回池，等 release_at 过后才可再申请。原因是残留信任：旧域名可能仍存在于他人书签、第三方白名单、已发出的邮件链接与搜索索引里，立刻转给下一个人等于把这些残留流量交给陌生人。滥用类撤销给足 180 天，主动放弃 30 天。",
+  "version": 1,
+  "updated": "2026-08-25",
+  "match": {
+    "$comment": "消费方约定：prefix 与申请文件名（去 .json）做全等比较，已 NFKC + lowercase。release_at 为 ISO 8601 日期（UTC），当日不可申请，次日起放开。比较用 today > release_at。",
+    "normalize": ["nfkc", "lowercase"],
+    "date_format": "YYYY-MM-DD",
+    "comparison": "可申请的条件是 today > release_at"
+  },
+  "default_periods_days": {
+    "$comment": "revoke.mjs 写入本文件时按撤销原因取值。",
+    "abuse": 180,
+    "phishing": 180,
+    "stale": 30,
+    "voluntary": 30,
+    "operator_reclaim": 0
+  },
+  "entries": []
+}

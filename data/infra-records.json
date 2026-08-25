@@ -1,0 +1,822 @@
+{
+  "$comment": "对账豁免白名单（PLAN.md §9.1）。这里列的是『存在于 Cloudflare、但不由任何 domains/ 申请文件推导出来』的记录：zone 自有基础设施、发信认证、PSL 提交证明、以及按档位下发的伴生记录形态。scripts/reconcile.mjs 在判定『CF 有 / Git 无 → 摘除』之前必须先过一遍本白名单，命中即跳过，不摘除、不开 Issue。危险警告：删除或写错本文件的条目会造成静默失败，且没有任何报错——删掉 _psl TXT 会让 PSL 未来的自动化把记录缺失当作移除信号（PSL.md 步骤 3 的自伤路径，收录直接中断）；删掉 CAA 会让 A/B 档的证书预算保护失效（§8.4），批量注册可以刷证书抽干共享池；删掉 _acme-challenge 委派会让 C 档用户的续期在几十天后突然开始失败，且排查方向极不明显；删掉 SPF / DKIM / _dmarc 会把本服务自己的发信解析删掉，通知邮件全部进垃圾箱或退信。首次上线必须先跑 dry-run 一周（§9.1）。",
+  "version": 1,
+  "updated": "2026-08-25",
+  "zones": [
+    "tcp.red",
+    "udp.red"
+  ],
+  "match": {
+    "$comment": "消费方约定：name 为相对 zone 的名字，`@` 表示 zone apex，`*` 为单标签通配符（不跨点），`**` 为多标签通配符。match 为 exact 时 name 全等比较（大小写不敏感）；为 wildcard 时按上述通配语义匹配；为 regex 时 pattern 字段为 JS 正则。type 为 `*` 表示不限记录类型。命中任一条 → 该记录豁免对账摘除。",
+    "apex_token": "@",
+    "case_sensitive": false,
+    "wildcard_single_label": "*",
+    "wildcard_multi_label": "**"
+  },
+  "records": [
+    {
+      "name": "_psl",
+      "type": "TXT",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "PSL 提交流程",
+      "reference": "PSL.md 步骤 3；PLAN.md §C2、§9.1",
+      "value_pattern": "^https://github\\.com/publicsuffix/list/pull/[0-9]+$",
+      "$comment": "PSL 提交证明，两个 zone 各一条，值为 PSL PR 的 URL。必须永久保留：指南规定保留即表示『希望持续收录』，未来的自动化会把记录缺失当作移除信号。绝不可摘除，即使看起来是手工写入的漂移——它本来就是手工写入的。"
+    },
+    {
+      "name": "@",
+      "type": "CAA",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "证书策略",
+      "reference": "PLAN.md §8.4",
+      "$comment": "zone apex 的 CAA。CA 签发时树形上溯取最近祖先（RFC 8659），apex 这条决定谁能给 *.tcp.red 签证书，必须允许 Cloudflare 的 Universal SSL 通配签发（digicert.com / letsencrypt.org / pki.goog / sectigo.com / ssl.com）。摘掉它等于放开全域签发策略。"
+    },
+    {
+      "name": "*",
+      "type": "CAA",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "证书策略",
+      "reference": "PLAN.md §8.4、M0 item 7",
+      "$comment": "通配名字上的 CAA。与 apex 一并构成默认证书策略。注意：这条是 zone 级基础设施，与『每个前缀随主记录下发的 CAA』不是同一回事，后者由申请文件按档位推导（见下方 derived_records）。"
+    },
+    {
+      "name": "_acme-challenge",
+      "type": "*",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "证书策略",
+      "reference": "PLAN.md §8.4",
+      "$comment": "zone apex 层的 ACME 挑战名，用于 tcp.red 自身或 *.tcp.red 的 DNS-01 签发。"
+    },
+    {
+      "name": "_acme-challenge.*",
+      "type": "CNAME",
+      "match": "wildcard",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": false,
+      "managed_by": "gitops",
+      "owner": "C 档申请者（tls.acme_dns_delegate）",
+      "reference": "PLAN.md §5、§8.4、§9.1 伴生记录表；M0 item 7",
+      "$comment": "C 档用户声明 tls.acme_dns_delegate 时下发的 DNS-01 委派 CNAME。虽然由 GitOps 下发，但它不是主记录，只按申请文件的 tls 字段推导——reconcile.mjs 若只比对主记录就会把它当多余记录摘掉，用户的续期会在几十天后突然失败。理想实现是让 reconcile.mjs 从申请文件推导出完整记录集后精确比对（§9.1 结尾）；本条通配是该实现到位前的兜底，也是防止推导逻辑出 bug 时造成不可逆删除的安全网。"
+    },
+    {
+      "name": "@",
+      "type": "TXT",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "发信认证",
+      "reference": "PLAN.md §10、M0 item 3",
+      "value_pattern": "^v=spf1",
+      "$comment": "apex SPF。同时豁免 apex 上其他用途的 TXT（域名所有权验证、_psl 之外的第三方校验串）。注意 apex TXT 可能有多条，摘除任一条都可能打断某个外部验证。"
+    },
+    {
+      "name": "_dmarc",
+      "type": "TXT",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "发信认证",
+      "reference": "PLAN.md §10、§9.1、M0 item 3",
+      "$comment": "DMARC 策略（v=DMARC1; p=quarantine; rua=mailto:dmarc@tcp.red）。缺 DMARC 会明显影响 Gmail / Outlook 收件箱率。"
+    },
+    {
+      "name": "_dmarc.notify",
+      "type": "TXT",
+      "match": "exact",
+      "zones": [
+        "tcp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "发信认证",
+      "reference": "PLAN.md §10",
+      "$comment": "发信子域 notify.tcp.red 的 DMARC，与主域策略独立。"
+    },
+    {
+      "name": "**_domainkey**",
+      "type": "*",
+      "match": "wildcard",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "provider",
+      "owner": "Resend / DKIM",
+      "reference": "PLAN.md §9.1、§10",
+      "$comment": "DKIM 公钥记录，涵盖 <selector>._domainkey、<selector>._domainkey.notify 等全部形态（Resend 与各家 selector 命名不一致，故用多标签通配）。由邮件服务商自动创建与轮换，绝不可摘除——摘掉即刻导致签名校验失败，通知邮件进垃圾箱。"
+    },
+    {
+      "name": "@",
+      "type": "MX",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "收信",
+      "reference": "PLAN.md §9.1、M0 item 3",
+      "$comment": "apex MX，abuse@tcp.red 的收信路径。§15 与 PSL 提交都承诺 abuse 邮箱可达且 24h 响应，摘掉它等于毁掉该承诺。"
+    },
+    {
+      "name": "notify",
+      "type": "*",
+      "match": "exact",
+      "zones": [
+        "tcp.red"
+      ],
+      "permanent": true,
+      "managed_by": "provider",
+      "owner": "Resend",
+      "reference": "PLAN.md §10、§9.1、M0 item 3",
+      "$comment": "独立发信子域 notify.tcp.red 的全部记录（MX / TXT / CNAME 跟踪域等，Resend 自动创建）。用途是把用户滥用导致的信誉损失隔离在子域外。"
+    },
+    {
+      "name": "notify.**",
+      "type": "*",
+      "match": "wildcard",
+      "zones": [
+        "tcp.red"
+      ],
+      "permanent": true,
+      "managed_by": "provider",
+      "owner": "Resend",
+      "reference": "PLAN.md §10",
+      "$comment": "notify.tcp.red 之下的服务商记录（send.notify、bounce.notify、DKIM selector 等）。"
+    },
+    {
+      "name": "@",
+      "type": "A",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "站点",
+      "reference": "PLAN.md §9.1",
+      "$comment": "apex 主站解析（含 AAAA / CNAME flattening 形态）。§9.1 明确要求豁免 `@`。"
+    },
+    {
+      "name": "www",
+      "type": "*",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "站点",
+      "reference": "PLAN.md §9.1",
+      "$comment": "主站 www。§9.1 明确要求豁免。"
+    },
+    {
+      "name": "_mta-sts",
+      "type": "TXT",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "发信认证",
+      "reference": "PLAN.md §10",
+      "$comment": "MTA-STS 策略 ID。若未部署 MTA-STS 则此条为空占位，不影响对账。"
+    },
+    {
+      "name": "_smtp._tls",
+      "type": "TXT",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "manual",
+      "owner": "发信认证",
+      "reference": "PLAN.md §10",
+      "$comment": "TLS-RPT 报告地址。同上，未部署时为占位。"
+    },
+    {
+      "name": "_cf-custom-hostname",
+      "type": "TXT",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "provider",
+      "owner": "Cloudflare",
+      "reference": "PLAN.md §9.1",
+      "$comment": "Cloudflare 自动创建的校验记录（SSL for SaaS / 自定义主机名等）。§9.1 要求豁免 CF 自动创建的记录。"
+    },
+    {
+      "name": "cf2024-1._domainkey",
+      "type": "TXT",
+      "match": "exact",
+      "zones": [
+        "tcp.red",
+        "udp.red"
+      ],
+      "permanent": true,
+      "managed_by": "provider",
+      "owner": "Cloudflare Email Routing",
+      "reference": "PLAN.md §9.1",
+      "$comment": "Cloudflare Email Routing 的 DKIM，开启邮件路由时自动创建。已被 **_domainkey** 通配覆盖，此处显式列出便于审阅。"
+    }
+  ],
+  "derived_records": {
+    "$comment": "这一节不是白名单，而是给 reconcile.mjs 的推导说明：以下记录由申请文件推导得出，属于 domains/ 命名空间，应当参与对账——但必须作为『该名字应有的完整记录集』的一部分来比对，而不是只比对主记录、把其余视为多余（§9.1 结尾）。列在这里是为了让实现者不漏掉伴生记录；若推导逻辑尚未实现，上方 records 里的 _acme-challenge.* 通配会先兜住最危险的那一条。",
+    "reference": "PLAN.md §8.4 档位表、§9.1 伴生记录表",
+    "per_prefix": [
+      {
+        "record": "<prefix>",
+        "type": "A / AAAA / CNAME / SRV",
+        "source": "record 字段",
+        "$comment": "主记录。A 档 proxied:true，B/C 档 proxied:false，SRV 强制 proxied:false。"
+      },
+      {
+        "record": "<prefix>",
+        "type": "CAA",
+        "source": "按档位推导",
+        "tiers": {
+          "A": "下发 `0 issue \";\"` + `0 issuewild \";\"`",
+          "B": "同 A 档，配额消耗结构性为零",
+          "C": "不下发阻挡性 CAA，否则用户无法签证书",
+          "D": "不支持（经 CF 转发全端口 TCP/UDP，D7）"
+        },
+        "$comment": "档位切换（B→C 或 C→B）须同步增删该记录。漏掉的后果：B 档配额保护静默失效，且无任何报错。四档定义见 D7 与 §8.4。"
+      },
+      {
+        "record": "_acme-challenge.<prefix>",
+        "type": "CNAME",
+        "source": "tls.acme_dns_delegate 字段（仅 C 档）",
+        "$comment": "漏掉的后果：用户续期突然开始失败，排查方向不明显。"
+      }
+    ]
+  },
+  "reconcile_policy": {
+    "$comment": "对账处置策略摘要，与 §9.1 差异表对齐。白名单命中的记录一律跳过全部处置分支。",
+    "namespace": "只处理 domains/ 命名空间内的名字",
+    "dry_run_required_days": 7,
+    "on_whitelist_hit": "skip",
+    "on_missing_gitops_comment": "标为来源不明，人工确认后再动，不自动摘除",
+    "legacy_snapshot": "对账任务在删除任何记录前，必须先比对 legacy_reserved.records；命中即跳过并计入 skipped_legacy 指标，不得进入删除队列。"
+  },
+  "legacy_reserved": {
+    "$comment": "【最高危段落，删改前务必读完】上线本服务之前，两个 zone 里已存在的全部在用记录的快照，于 2026-08-25 直接从 Cloudflare API 拉取，非手写。这些记录没有任何对应的申请文件，因此 §9.3 的对账任务会把它们判为孤儿记录并删除——那将一次性拆掉运营者正在运行的全部服务（Cloudflare Tunnel、Tailscale 节点、邮件、各类面板）。本段落是唯一的屏障。policy 为 never_touch：既不删除也不修改。同时 occupied_prefixes 中的前缀必须禁止申请，否则申请者会得到一条覆盖既有隧道的记录，这既破坏运营者的服务，也让申请者拿到一个行为诡异的域名。注意：本快照会随手工改动 DNS 而过期，须定期用 scripts/snapshot-legacy.mjs 重新生成。",
+    "policy": "never_touch",
+    "snapshot_taken": "2026-08-25",
+    "source": "Cloudflare API /zones/{id}/dns_records",
+    "regenerate_with": "scripts/snapshot-legacy.mjs",
+    "stale_warning": "手工改动 DNS 后本快照即过期；对账前若发现记录数与实际不符，先重新生成再运行",
+    "record_count": 64,
+    "count_by_zone": {
+      "tcp.red": 31,
+      "udp.red": 33
+    },
+    "records": [
+      {
+        "zone": "tcp.red",
+        "name": "@",
+        "type": "CNAME",
+        "content": "d25284b3-077a-41db-ba55-d012d5c5dc07.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "@",
+        "type": "MX",
+        "content": "route1.mx.cloudflare.net",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "@",
+        "type": "MX",
+        "content": "route2.mx.cloudflare.net",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "@",
+        "type": "MX",
+        "content": "route3.mx.cloudflare.net",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "@",
+        "type": "TXT",
+        "content": "\"v=spf1 include:_spf.mx.cloudflare.net ~all\"",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "_acme-challenge.cn-api",
+        "type": "TXT",
+        "content": "ehKOWJjE-0CjlKJBNxSdtg9r_CWYGgvGSIBmoK1vDeM",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "_acme-challenge.csjj",
+        "type": "CNAME",
+        "content": "csjj.tcp.red.511ab3d22a5905eb.dcv.cloudflare.com",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "_cf-custom-hostname.csjj",
+        "type": "TXT",
+        "content": "b42d7d50-200d-4730-85c3-41f262918f1b",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "api",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "cf2024-1._domainkey",
+        "type": "TXT",
+        "content": "\"v=DKIM1; h=sha256; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiweykoi+o48IOGuP7GR3X0MOExCUDY/BCRHoWBnh3rChl7WhdyCxW3jgq1daEjPPqoi7sJvdg5hEQVsgVRQP4DcnQDVjGMbASQtrY4WmB1VebF+RPJB2ECPsEDTpeiI5ZyUAwJaVX7r6bznU67g7LvFq35yIo4sdlmtZGV+i0H4cpYH9+3JJ78k\" \"m4KXwaf9xUJCWF6nxeD+qG6Fyruw1Qlbds2r85U9dkNDVAS3gioCvELryh1TxKGiVTkg4wqHTyHfWsp7KD3WQHYJn0RyfJJu6YEmL77zonn7p2SRMvTMP3ZEXibnC9gz3nnhR6wcYL8Q7zXypKTMD58bTixDSJwIDAQAB\"",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "check",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "check-admin",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "claude-monitor-sg",
+        "type": "CNAME",
+        "content": "ab57e0ee-3dd1-4fc4-95fd-0d3d87078bf3.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "cn-api",
+        "type": "CNAME",
+        "content": "cf-api.udp.red",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "csjj",
+        "type": "CNAME",
+        "content": "cf-api.udp.red",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "csjj-direct",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "de",
+        "type": "A",
+        "content": "100.119.63.21",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "demo",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "gpt-checker",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "gpt-pricing",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "jkjk02",
+        "type": "CNAME",
+        "content": "6e18a3b8-c823-4932-affc-2d1cd138006d.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "jp",
+        "type": "A",
+        "content": "100.119.63.21",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "key",
+        "type": "A",
+        "content": "159.195.18.225",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "pal",
+        "type": "CNAME",
+        "content": "ce216c61-0f3e-4f4e-b330-ed87bebb462f.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "price",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "sg",
+        "type": "A",
+        "content": "100.119.63.21",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "sub",
+        "type": "CNAME",
+        "content": "177b9a86-eeb1-4dab-82bb-dbfed7746c47.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "test",
+        "type": "CNAME",
+        "content": "d25284b3-077a-41db-ba55-d012d5c5dc07.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "tcp.red",
+        "name": "tw",
+        "type": "A",
+        "content": "100.119.63.21",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "uk",
+        "type": "A",
+        "content": "100.119.63.21",
+        "proxied": false
+      },
+      {
+        "zone": "tcp.red",
+        "name": "us",
+        "type": "A",
+        "content": "100.119.63.21",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "@",
+        "type": "CNAME",
+        "content": "d25284b3-077a-41db-ba55-d012d5c5dc07.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "@",
+        "type": "MX",
+        "content": "route1.mx.cloudflare.net",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "@",
+        "type": "MX",
+        "content": "route2.mx.cloudflare.net",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "@",
+        "type": "MX",
+        "content": "route3.mx.cloudflare.net",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "@",
+        "type": "TXT",
+        "content": "\"v=spf1 include:_spf.mx.cloudflare.net ~all\"",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "ai",
+        "type": "CNAME",
+        "content": "7764b432-329a-4902-9672-3e2390540aa7.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "anytls-or",
+        "type": "A",
+        "content": "138.2.102.125",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "anytls-sg",
+        "type": "A",
+        "content": "138.2.102.125",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "api",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "asspp",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "cf-api",
+        "type": "CNAME",
+        "content": "api.cloudflare.182682.xyz",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "cf2024-1._domainkey",
+        "type": "TXT",
+        "content": "\"v=DKIM1; h=sha256; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiweykoi+o48IOGuP7GR3X0MOExCUDY/BCRHoWBnh3rChl7WhdyCxW3jgq1daEjPPqoi7sJvdg5hEQVsgVRQP4DcnQDVjGMbASQtrY4WmB1VebF+RPJB2ECPsEDTpeiI5ZyUAwJaVX7r6bznU67g7LvFq35yIo4sdlmtZGV+i0H4cpYH9+3JJ78k\" \"m4KXwaf9xUJCWF6nxeD+qG6Fyruw1Qlbds2r85U9dkNDVAS3gioCvELryh1TxKGiVTkg4wqHTyHfWsp7KD3WQHYJn0RyfJJu6YEmL77zonn7p2SRMvTMP3ZEXibnC9gz3nnhR6wcYL8Q7zXypKTMD58bTixDSJwIDAQAB\"",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "dkim-2026._domainkey.email",
+        "type": "CNAME",
+        "content": "dkim-2026.email.udp.red.dkim.sin1.oracleemaildelivery.com",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "email",
+        "type": "TXT",
+        "content": "\"v=spf1 include:rp.oracleemaildelivery.com include:ap.rp.oracleemaildelivery.com include:eu.rp.oracleemaildelivery.com ~all\"",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "goofish",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "key",
+        "type": "CNAME",
+        "content": "177b9a86-eeb1-4dab-82bb-dbfed7746c47.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "komari",
+        "type": "CNAME",
+        "content": "db08b7b5-4f26-4375-8dba-998abfba9981.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "max",
+        "type": "CNAME",
+        "content": "91ccb5df-8bdd-4faf-a330-3ad8fe43c2e1.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "mirofish",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "origin-api",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "ota",
+        "type": "A",
+        "content": "8.8.8.8",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "palshop",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "palshop-beta",
+        "type": "A",
+        "content": "138.2.102.125",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "panel",
+        "type": "CNAME",
+        "content": "d25284b3-077a-41db-ba55-d012d5c5dc07.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "relay",
+        "type": "A",
+        "content": "138.2.102.125",
+        "proxied": false
+      },
+      {
+        "zone": "udp.red",
+        "name": "serverbox",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "social",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "stars",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "sub",
+        "type": "CNAME",
+        "content": "d25284b3-077a-41db-ba55-d012d5c5dc07.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "sub2api",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "syncthing",
+        "type": "CNAME",
+        "content": "d25284b3-077a-41db-ba55-d012d5c5dc07.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "uflow",
+        "type": "CNAME",
+        "content": "aeb48423-55c3-45a8-9da7-5861021cb9d4.cfargotunnel.com",
+        "proxied": true
+      },
+      {
+        "zone": "udp.red",
+        "name": "webdav",
+        "type": "CNAME",
+        "content": "9adeddea-48b0-4e99-a269-034b6955f7f9.cfargotunnel.com",
+        "proxied": true
+      }
+    ]
+  },
+  "occupied_prefixes": {
+    "$comment": "来自 legacy_reserved 的既有前缀，禁止申请。与 reserved.json 的区别：reserved.json 挡的是钓鱼与基础设施风险，这里挡的是与运营者既有服务的真实冲突。校验器须同时查两处。其中 de/jp/sg/tw/uk/us 为 2 字符，本已落在 D5 保留池内，此处重复无害。注意 D2 要求前缀成对锁定，而成对锁定的前提是两个 zone 都空闲；本列表不区分 zone，任一 zone 被占即整个前缀不可申请。",
+    "policy": "deny_application",
+    "count": 45,
+    "prefixes": [
+      "ai",
+      "anytls-or",
+      "anytls-sg",
+      "api",
+      "asspp",
+      "cf-api",
+      "check",
+      "check-admin",
+      "claude-monitor-sg",
+      "cn-api",
+      "csjj",
+      "csjj-direct",
+      "de",
+      "demo",
+      "email",
+      "goofish",
+      "gpt-checker",
+      "gpt-pricing",
+      "jkjk02",
+      "jp",
+      "key",
+      "komari",
+      "max",
+      "mirofish",
+      "origin-api",
+      "ota",
+      "pal",
+      "palshop",
+      "palshop-beta",
+      "panel",
+      "price",
+      "relay",
+      "serverbox",
+      "sg",
+      "social",
+      "stars",
+      "sub",
+      "sub2api",
+      "syncthing",
+      "test",
+      "tw",
+      "uflow",
+      "uk",
+      "us",
+      "webdav"
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "red-domains-register",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "tcp.red / udp.red 免费二级域名分发",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "validate": "node scripts/validate.mjs",
+    "test": "node --test scripts/",
+    "snapshot": "node scripts/snapshot-legacy.mjs"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1"
+  }
+}
