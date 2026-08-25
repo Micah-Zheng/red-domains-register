@@ -34,8 +34,22 @@ DNS 记录只在申请者指定的 zone 下发；另一个 zone 的同名前缀�
 
 ### D3 · PII 方案：哈希入公开仓 + 私有侧仓存明文
 
-公开主干的 JSON 只存 `contact_hash = sha256(lower(email) + PEPPER)`，用于去重、配额统计与
+公开主干的 JSON 只存 `contact_hash = sha256(lower(email))`，用于去重、配额统计与
 "同一人换号重复申请"识别。明文邮箱由 bot 写入私有侧仓 `red-domains/contacts`，供下发与下线流程读取。
+
+**没有 PEPPER，也不可能有。** 本节初版写的是 `sha256(lower(email) + PEPPER)`，但哈希由申请者
+在自己机器上计算（README 步骤 3），秘密 pepper 他拿不到，加了就没人算得出正确的值。改用公开
+salt 的话攻击者同样拿得到，只能挡住通用彩虹表，挡不住"拿邮箱字典跑一遍"——收益有限而要付出
+全量迁移既有哈希与侧仓键名的代价。因此实现选择不加盐，**并把这层保护的真实边界写进 README**，
+而不是让"盐化哈希"这个说法给出超出实际的安全感。
+
+于是本方案的保证准确表述为：**防批量**（`git clone` 拿不到可直接群发的邮箱列表），
+**不防定向反查**（已知某人邮箱者可自行算哈希比对）。真正不可替代的价值在于明文从不进入公开
+仓库的 Git 历史，因而 GDPR 删除权可以被真正履行——这正是本节开头选择哈希入库的理由。
+
+大小写必须先归一：`lower()` 不是可选项。漏掉它同一个人换个大小写就是另一个 `contact_hash`，
+§6 的 `r_quotaPerContact`（防换号不换人）随之失效，且没有任何报错。校验侧只看得到哈希、
+无从纠正，只能靠 README 把命令写对。
 
 理由：把几万个真实邮箱做成一个 `git clone` 就能拿走的数据集，是纯负债；且 Git 历史不可逆，
 与 GDPR 删除权直接冲突。备选的"公钥加密入库"省掉一个仓库，但密文永久留在公开历史里,
@@ -418,7 +432,7 @@ red-domains/contacts            # 私有：明文邮箱与生命周期状态
 | 文件名 | `^[a-z0-9]([a-z0-9-]{2,61}[a-z0-9])?\.json$`（≥4 字符，ASCII，单层，不以 `-` 起止） |
 | `description` | 5–200 字符；NFKC 归一化后剥离控制字符与零宽字符。**不校验用途与 zone 的关系**（D1），但**拒绝影音分发/网盘/大文件镜像意图**（D7，CF CDN 条款） |
 | `owner.github` | 必填，须等于 PR actor |
-| `owner.contact_hash` | 必填，`sha256:` + 64 hex。明文邮箱只出现在 PR 模板字段里 |
+| `owner.contact_hash` | 必填，`sha256:` + 64 hex，且须为**小写归一后**邮箱的哈希（见 D3）。明文邮箱只出现在 PR 模板字段里 |
 | `record.type` | `A` / `AAAA` / `CNAME` / **`SRV`**（游戏服发现，如 `_minecraft._tcp`；SRV 本就不经代理，故须 `proxied: false`）。`TXT` 仅挑战用，不长期挂载；`NS` 不开放自助 |
 | `record.value` | A/AAAA 须公网单播：**拒绝** RFC1918、`127/8`、`169.254/16`、CGNAT `100.64/10`、`::1`、`fc00::/7`、组播、`0.0.0.0`。CNAME 须合法 FQDN 且不指回 `*.tcp.red` / `*.udp.red` |
 | `proxied` | 布尔，**默认 `true`**（省略即 true）。`true` 时 TTL 强制 1(auto)、SSL 模式须 Full (strict)；`false` 时 TTL 允许 `60`–`86400`，默认 300。`record.type: SRV` 时须为 `false`（D7） |
