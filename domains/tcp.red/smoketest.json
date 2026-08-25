@@ -1,6 +1,6 @@
 {
   "description": "个人博客，Hugo 静态站",
-  "owner": { "github": "micahzheng", "contact_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  "owner": { "github": "micahzheng", "contact_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
   "record": { "type": "CNAME", "value": "micahzheng.github.io" },
   "check": { "mode": "http", "port": 443 }
 }
