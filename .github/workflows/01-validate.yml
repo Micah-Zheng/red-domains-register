@@ -28,13 +28,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: 检出 PR 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # 需要 base 分支来算 diff，判断这个 PR 到底改了哪些申请文件。
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
@@ -63,7 +63,7 @@ jobs:
       # 明文邮箱从不进公开仓库（PLAN §4）。
       - name: 上传校验报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: validation-report
           path: report.json
