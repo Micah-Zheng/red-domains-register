@@ -63,7 +63,7 @@ jobs:
       # 明文邮箱从不进公开仓库（PLAN §4）。
       - name: 上传校验报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: validation-report
           path: report.json
