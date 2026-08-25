@@ -1,5 +1,6 @@
 // 端到端回归：真实 data/ 状态 + 真实 schema，覆盖四档判定与短路语义。
 // 跑法：node tests/validate.e2e.mjs
+import { readdirSync } from 'node:fs';
 import { runRules, loadRepoState } from '../scripts/validate.mjs';
 
 const state = loadRepoState();
@@ -86,6 +87,47 @@ const short = run(base({ owner: { github: 'x', contact_hash: 'bad' } }));
 const shortOk = short.findings.length === 1;
 if (!shortOk) fail++; else pass++;
 console.log(`  ${shortOk ? 'ok  ' : 'FAIL'} REJECT 后短路（findings=${short.findings.length}）`);
+
+// exclude：CI 检出的是合并后的树，新增的申请文件已在工作区。loadRepoState 必须
+// 把它剔除，否则每个新申请都会撞上自己的前缀（r_prefixAvailable 只放行 'M'）。
+// 用真实已存在的申请文件当样本：不剔除时它算已占用，剔除后应当可用。
+{
+  const existingFiles = readdirSync('domains/tcp.red').filter((f) => f.endsWith('.json'));
+  if (existingFiles.length === 0) {
+    console.log('  skip 自撞回归：domains/tcp.red 下暂无申请文件可用作样本');
+  } else {
+    const sample = existingFiles[0];
+    const prefix = sample.replace(/\.json$/, '');
+    const path = `domains/tcp.red/${sample}`;
+
+    const withSelf = loadRepoState();
+    const occupied = withSelf.existing.has(prefix);
+
+    const excluded = loadRepoState(undefined, new Set([path]));
+    const freed = !excluded.existing.has(prefix);
+
+    if (occupied && freed) { pass++; console.log(`  ok   exclude 剔除本次变更文件（${prefix}）`); }
+    else {
+      fail++;
+      console.log(`  FAIL exclude 剔除本次变更文件（${prefix}）`);
+      console.log(`       未剔除时应占用=${occupied}，剔除后应释放=${freed}`);
+    }
+
+    // 端到端：新增一个与工作区同名的申请，剔除后不该被 r_prefixAvailable 拒。
+    const rep = runRules({
+      filePath: path, doc: base(), actor: 'Micah-Zheng',
+      changedFiles: [path], state: excluded, actorMeta: meta,
+      challengeVerified: true, today: '2026-08-25', changeKind: 'A',
+    });
+    const notSelfRejected = !rep.findings.some((f) => f.rule === 'r_prefixAvailable');
+    if (notSelfRejected) { pass++; console.log('  ok   新增申请不被自身前缀拒绝'); }
+    else {
+      fail++;
+      console.log('  FAIL 新增申请不被自身前缀拒绝');
+      for (const f of rep.findings) console.log(`       - ${f.rule}: ${f.verdict} — ${f.message}`);
+    }
+  }
+}
 
 console.log(`\n${pass}/${pass + fail} 通过`);
 process.exit(fail ? 1 : 0);

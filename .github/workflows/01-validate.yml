@@ -68,3 +68,19 @@ jobs:
           name: validation-report
           path: report.json
           retention-days: 7
+
+      # 合并闸门。ci-validate.mjs 退出码恒为 0（好让阶段 ② 能给 REJECT 贴评论），
+      # 所以判定必须在这里转成 job 状态，否则被拒的申请照样拿绿勾合并 —— 那等于
+      # 整个硬规则层没有攔截力。必须排在上传报告之后：否则 REJECT 时报告会丢。
+      #
+      # REVIEW 不算失败：它的语义是"转人工"，由人来合，而不是把 PR 判死。
+      - name: 判定闸门
+        if: always()
+        run: |
+          verdict=$(node -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync("report.json","utf8")).verdict??""))}catch(e){process.stdout.write("MISSING")}')
+          echo "verdict=$verdict"
+          case "$verdict" in
+            PASS|REVIEW|SKIP) echo "✅ 闸门放行（$verdict）" ;;
+            REJECT) echo "::error::申请被硬规则拒绝，详见评论与 report.json"; exit 1 ;;
+            *) echo "::error::report.json 缺失或 verdict 无法解析（$verdict），fail-closed"; exit 1 ;;
+          esac
