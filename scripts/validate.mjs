@@ -73,8 +73,14 @@ export const hasInvisible = (s) =>
  * 加载仓库状态。这是唯一读盘的地方，便于测试注入。
  * 缺失数据文件按 fail-closed 处理：抛错，退出码 3，转人工。
  * 不做静默降级 —— reserved.json 读不到却继续放行，等于保留词保护整体失效。
+ *
+ * exclude：本次 PR 变更的申请文件路径集合，必须从 existing 里剔除。
+ * CI 检出的是 PR **合并后**的树，新增的申请文件已经在工作区里；若不剔除，
+ * 扫盘会把待校验的前缀数成"已存在"，于是每个新申请都被自己占用的名字拒掉
+ * （r_prefixAvailable 只在 changeKind==='M' 时放行，新增走不到那个分支）。
+ * 配额两条规则用 prefix !== ctx.prefix 自行排除了本体，不受此影响。
  */
-export function loadRepoState(root = ROOT) {
+export function loadRepoState(root = ROOT, exclude = new Set()) {
   const state = {
     reserved: readJson(join(root, 'data/reserved.json')),
     cnameAllowlist: readJson(join(root, 'data/cname-allowlist.json')),
@@ -90,6 +96,7 @@ export function loadRepoState(root = ROOT) {
     if (!existsSync(dir)) continue;
     for (const f of readdirSync(dir)) {
       if (!f.endsWith('.json')) continue;
+      if (exclude.has(`domains/${zone}/${f}`)) continue;
       const prefix = norm(f.replace(/\.json$/, ''));
       let doc;
       try {

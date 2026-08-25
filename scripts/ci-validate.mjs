@@ -97,7 +97,9 @@ if (applications.length === 0) {
   process.exit(0);
 }
 
-const state = loadRepoState();
+// 本次 PR 变更的申请文件必须从 existing 里剔除：checkout 给的是合并后的树，
+// 新增文件已在工作区，不剔除就会让每个新申请撞上自己的前缀。
+const state = loadRepoState(undefined, new Set(applications.map((a) => a.path)));
 // PR_AUTHOR 是 workflow 传入的名字；PR_ACTOR 作为别名保留，两者都接受。
 // 曾经这里只读 PR_ACTOR 而 workflow 只传 PR_AUTHOR，导致 actor 恒为空 ——
 // 所有涉及提交者身份的规则（归属一致、配额、账号年龄）都在对空账号做判断，
