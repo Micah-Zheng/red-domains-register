@@ -1,6 +1,0 @@
-{
-  "description": "个人主页，托管在 GitHub Pages。同时作为本仓库上线后的首个真实申请，用于验证校验、下发、通知三段是否联通。",
-  "owner": { "github": "Micah-Zheng", "contact_hash": "sha256:b6af6b777c422f81c02eec4d2fbc9d98364a881aad13c9cc6c0d7cd4aef8ba06" },
-  "record": { "type": "CNAME", "value": "micahzheng.github.io" },
-  "check": { "mode": "http", "port": 443 }
-}
