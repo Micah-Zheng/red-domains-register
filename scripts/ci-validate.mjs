@@ -76,7 +76,10 @@ async function actorReputation(login, repo) {
     accountAgeDays,
     publicRepos: u?.public_repos ?? 0,
     followers: u?.followers ?? 0,
-    prCount24h: mine?.total_count ?? 99,     // 取不到按超限处理
+    // 取不到时留 null 并置 unknown 标记 —— 仍 fail-closed 转人工，
+    // 但不能编一个假计数写进给申请者看的评论里。
+    prCount24h: mine?.total_count ?? null,
+    prCount24hUnknown: mine?.total_count == null,
     globalNew24h: all?.total_count ?? 0,
   };
 }

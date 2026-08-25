@@ -465,6 +465,13 @@ const r_quotaPerContact = (ctx) => {
 
 const r_rateLimit24h = (ctx) => {
   const m = ctx.actorMeta;
+  if (m?.prCount24hUnknown) {
+    // 计数查不到（API 故障/限流）时 fail-closed 转人工，但如实说明原因，
+    // 不假称申请者超限 —— 那是会误导人的假消息。
+    return review('r_rateLimit24h',
+      '无法查询你近 24 小时的申请数（GitHub API 暂时不可用），本次转人工',
+      '不是你的问题，等人工过一遍即可');
+  }
   if (m?.prCount24h != null && m.prCount24h > 2) {
     return review('r_rateLimit24h',
       `你在 24 小时内已提交 ${m.prCount24h} 个申请（上限 2）`,
