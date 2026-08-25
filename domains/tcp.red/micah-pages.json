@@ -1,6 +1,0 @@
-{
-  "description": "个人主页，GitHub Pages 静态站",
-  "owner": { "github": "Micah-Zheng", "contact_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
-  "record": { "type": "CNAME", "value": "micahzheng.github.io" },
-  "check": { "mode": "http", "port": 443 }
-}
