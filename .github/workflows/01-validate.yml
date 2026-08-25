@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: 检出 PR 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # 需要 base 分支来算 diff，判断这个 PR 到底改了哪些申请文件。
           fetch-depth: 0

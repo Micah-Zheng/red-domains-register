@@ -35,7 +35,7 @@ jobs:
     if: github.event.workflow_run.event == 'pull_request'
     steps:
       # 只检出主干的脚本，不含任何 PR 内容。ref 显式钉在触发时的 main。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
