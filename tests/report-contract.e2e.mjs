@@ -102,10 +102,13 @@ const stub = join(dir, 'stub.mjs');
 writeFileSync(stub, `
 let captured = '';
 globalThis.fetch = async (_u, o) => {
-  captured = JSON.parse(o.body).messages[0].content;
+  const b = JSON.parse(o.body);
+  // OpenAI 兼容形状：messages[0] 是 system，用户内容在 role==='user' 那条。
+  captured = b.messages.find((m) => m.role === 'user').content;
   process.on('exit', () => console.log('PROMPT>>>' + captured));
-  return new Response(JSON.stringify({content:[{type:'tool_use',name:'submit_verdict',
-    input:{verdict:'looks_fine',reasons:[],confidence:0.9,signals:['none']}}]}),{status:200});
+  return new Response(JSON.stringify({choices:[{message:{tool_calls:[{
+    function:{name:'submit_verdict',arguments:JSON.stringify(
+      {verdict:'looks_fine',reasons:[],confidence:0.9,signals:['none']})}}]}}]}),{status:200});
 };
 await import('${process.cwd()}/scripts/ai-triage.mjs');
 `);
@@ -113,7 +116,7 @@ writeFileSync(rp, JSON.stringify(produced));
 const out4 = execFileSync('node', [stub], {
   encoding: 'utf8',
   env: { ...process.env, REPORT_PATH: rp, TRIAGE_OUT: join(dir, 'o.json'),
-         ANTHROPIC_API_KEY: 'fake', AI_SHADOW_MODE: 'true' },
+         AI_API_KEY: 'fake', AI_SHADOW_MODE: 'true' },
 });
 const prompt = out4.split('PROMPT>>>')[1] ?? '';
 ok(prompt.includes(doc.description), 'AI prompt 含申请说明（非 undefined）');
