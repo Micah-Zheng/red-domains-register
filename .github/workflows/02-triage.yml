@@ -50,7 +50,7 @@ jobs:
       # 取阶段①的 report.json。它是 PR 内容进入本段的唯一通道，且是我们自己
       # 生成的结构化 JSON，不是 PR 里的文件。
       - name: 下载校验报告
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: validation-report
           run-id: ${{ github.event.workflow_run.id }}
