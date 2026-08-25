@@ -148,12 +148,21 @@ export function deriveTier(doc) {
 // 可操作的下一步，而不只是"不合规"。
 // ---------------------------------------------------------------------------
 
+/**
+ * 是否仓库运营者。authorAssociation 由 GitHub 在 pull_request 事件里计算，
+ * 提交者无法伪造，可作为鉴权依据。
+ */
+export const isMaintainer = (ctx) =>
+  ctx.authorAssociation === 'OWNER' || ctx.authorAssociation === 'MEMBER'
+  || ctx.authorAssociation === 'COLLABORATOR';
+
 const reject = (rule, message, hint) => ({ rule, verdict: 'REJECT', message, hint });
 const review = (rule, message, hint) => ({ rule, verdict: 'REVIEW', message, hint });
 
 // ---- REJECT：结构性违规，无申诉价值 --------------------------------------
 
 const r_schemaValid = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const validate = ctx.ajv.compile(ctx.state.schema);
   if (validate(ctx.doc)) return null;
   const detail = validate.errors
@@ -181,6 +190,10 @@ const r_singleFileChange = (ctx) => {
 };
 
 const r_filenameRegex = (ctx) => {
+  // 删除时跳过：这条校验的是"新名字"的形态，而库里已存在的文件当初就过了这关，
+  // 或是运营者特批放行的短前缀。继续校验会让特批前缀的持有者永远无法自助释放。
+  // 路径形态与 zone 白名单由入口的 r_filePathShape 兜底，与本规则无关。
+  if (ctx.changeKind === 'D') return null;
   if (FILENAME_RE.test(ctx.file)) return null;
   const stem = ctx.file.replace(/\.json$/, '');
   let why = '需为单层小写 ASCII，4 至 63 字符，只含字母数字与连字符，且不以连字符起止';
@@ -193,6 +206,7 @@ const r_filenameRegex = (ctx) => {
 };
 
 const r_notReserved = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const { reserved } = ctx.state;
   const p = ctx.prefix;
   for (const list of reserved.match.exact_lists) {
@@ -211,6 +225,7 @@ const r_notReserved = (ctx) => {
 };
 
 const r_prefixAvailable = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const occupied = ctx.state.infra.occupied_prefixes?.prefixes ?? [];
   if (occupied.includes(ctx.prefix)) {
     return reject('r_prefixAvailable',
@@ -240,6 +255,7 @@ const r_prefixAvailable = (ctx) => {
 };
 
 const r_notInCooldown = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const entry = (ctx.state.cooldown.entries ?? []).find((e) => norm(e.prefix) === ctx.prefix);
   if (!entry) return null;
   if (ctx.today > entry.release_at) return null;
@@ -248,7 +264,31 @@ const r_notInCooldown = (ctx) => {
     '冷却期用于让旧域名的残留信任（书签、第三方白名单、搜索索引）自然过期，避免流量被转交给新持有人');
 };
 
+// 删除申请文件 = 释放该前缀。只允许删自己的记录；运营者可代删（滥用处置、
+// 用户失联）。此前 changedFiles() 的 --diff-filter 排除了 D，删除对整套规则
+// 不可见，任何人都能在一个"维护类"PR 里静默释放他人的前缀。
+const r_deleteOwnOnly = (ctx) => {
+  if (ctx.changeKind !== 'D') return null;
+  if (isMaintainer(ctx)) {
+    return review('r_deleteOwnOnly',
+      `运营者删除记录 ${ctx.prefix}.${ctx.zone}，转人工留痕`,
+      'Git 删除不会回收 DNS，合并后需确认 cf-sync 已清理对应记录');
+  }
+  if (!ctx.actor) {
+    return reject('r_deleteOwnOnly', '缺少 PR actor，无法核对删除权限');
+  }
+  if (norm(ctx.doc?.owner?.github) !== norm(ctx.actor)) {
+    return reject('r_deleteOwnOnly',
+      `${ctx.prefix}.${ctx.zone} 属于 ${ctx.doc?.owner?.github}，你（${ctx.actor}）无权删除`,
+      '只能释放自己名下的前缀');
+  }
+  return review('r_deleteOwnOnly',
+    `你正在释放自己的 ${ctx.prefix}.${ctx.zone}`,
+    '释放后进入冷却期，期间他人也无法申请；确认无误再合并');
+};
+
 const r_ownerMatchesActor = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   if (!ctx.actor) {
     return reject('r_ownerMatchesActor', '缺少 PR actor，无法核对 owner.github');
   }
@@ -259,6 +299,7 @@ const r_ownerMatchesActor = (ctx) => {
 };
 
 const r_publicUnicastTarget = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   // schema 的 pattern 已挡住绝大多数私网段。此处补 schema 表达不了的部分，
   // 并把理由写清楚 —— 用户看到"pattern 不匹配"是不知道自己填错了什么的。
   const { type, value } = ctx.doc?.record ?? {};
@@ -294,6 +335,7 @@ const r_publicUnicastTarget = (ctx) => {
 };
 
 const r_noCnameLoop = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const { type, value } = ctx.doc?.record ?? {};
   if (type !== 'CNAME' && type !== 'SRV') return null;
   const v = norm(value).replace(/\.$/, '');
@@ -308,6 +350,7 @@ const r_noCnameLoop = (ctx) => {
 };
 
 const r_contactHashFormat = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const h = ctx.doc?.owner?.contact_hash;
   if (!/^sha256:[0-9a-f]{64}$/.test(String(h ?? ''))) {
     return reject('r_contactHashFormat',
@@ -321,6 +364,7 @@ const r_contactHashFormat = (ctx) => {
 };
 
 const r_checkModeCoherent = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const { mode, port } = ctx.doc?.check ?? {};
   const type = ctx.doc?.record?.type;
   const proxied = ctx.doc?.proxied ?? true;
@@ -351,6 +395,7 @@ const r_checkModeCoherent = (ctx) => {
 // 一眼高得多。
 
 const r_descriptionMeaningful = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const raw = ctx.doc?.description ?? '';
   if (hasInvisible(raw)) {
     return reject('r_descriptionMeaningful',
@@ -414,6 +459,7 @@ const r_descriptionMeaningful = (ctx) => {
 };
 
 const r_accountAge = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const days = ctx.actorMeta?.accountAgeDays;
   if (days == null) {
     return review('r_accountAge', '无法获取 GitHub 账号年龄，转人工核验');
@@ -425,6 +471,7 @@ const r_accountAge = (ctx) => {
 };
 
 const r_accountActivity = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const m = ctx.actorMeta;
   if (!m) return review('r_accountActivity', '无法获取账号活动信息，转人工核验');
   if ((m.publicRepos ?? 0) > 0 || (m.publicGists ?? 0) > 0 || (m.followers ?? 0) > 0) return null;
@@ -434,6 +481,7 @@ const r_accountActivity = (ctx) => {
 };
 
 const r_quotaPerUser = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   // D1/D2：跨 zone 合并计数，成对锁定的一个前缀只算 1 个。
   const actor = norm(ctx.actor);
   let n = 0;
@@ -447,6 +495,7 @@ const r_quotaPerUser = (ctx) => {
 };
 
 const r_quotaPerContact = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const hash = norm(ctx.doc?.owner?.contact_hash);
   let n = 0;
   const owners = new Set();
@@ -464,6 +513,7 @@ const r_quotaPerContact = (ctx) => {
 };
 
 const r_rateLimit24h = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const m = ctx.actorMeta;
   if (m?.prCount24hUnknown) {
     // 计数查不到（API 故障/限流）时 fail-closed 转人工，但如实说明原因，
@@ -472,7 +522,7 @@ const r_rateLimit24h = (ctx) => {
       '无法查询你近 24 小时的申请数（GitHub API 暂时不可用），本次转人工',
       '不是你的问题，等人工过一遍即可');
   }
-  if (m?.prCount24h != null && m.prCount24h > 2) {
+  if (m?.prCount24h != null && m.prCount24h > 2 && !isMaintainer(ctx)) {
     return review('r_rateLimit24h',
       `你在 24 小时内已提交 ${m.prCount24h} 个申请（上限 2）`,
       '明天再来即可，无需重开 PR');
@@ -486,6 +536,7 @@ const r_rateLimit24h = (ctx) => {
 };
 
 const r_bareIpTarget = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   const { type } = ctx.doc?.record ?? {};
   if (type !== 'A' && type !== 'AAAA') return null;
   return review('r_bareIpTarget',
@@ -494,6 +545,7 @@ const r_bareIpTarget = (ctx) => {
 };
 
 const r_ownershipChallenge = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   // C5：目标所有权必须验证，否则可构造指向他人资源的悬空 CNAME 并借本域名的
   // 信任实施钓鱼。免挑战的唯一例外是名单内托管商 —— 它们自己要求所有权验证。
   const { type, value } = ctx.doc?.record ?? {};
@@ -505,6 +557,7 @@ const r_ownershipChallenge = (ctx) => {
 };
 
 const r_manualCheckMode = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   if (ctx.doc?.check?.mode !== 'manual') return null;
   return review('r_manualCheckMode',
     'check.mode: manual 首次申请需人工确认',
@@ -512,6 +565,7 @@ const r_manualCheckMode = (ctx) => {
 };
 
 const r_tierCoherent = (ctx) => {
+  if (ctx.changeKind === 'D') return null;
   // 档位与声明的一致性。schema 已挡死硬冲突，这里补语义层面的可疑组合。
   const tier = ctx.tier;
   if (tier === 'C' && !ctx.doc.tls?.public_cert && !ctx.doc.tls?.acme_dns_delegate) {
@@ -534,6 +588,7 @@ export const HARD_RULES = [
   // REJECT 组：顺序有意义 —— 先挡结构性问题，再查占用与归属
   r_schemaValid,
   r_singleFileChange,
+  r_deleteOwnOnly,
   r_filenameRegex,
   r_notReserved,
   r_prefixAvailable,

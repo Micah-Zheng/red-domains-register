@@ -49,10 +49,12 @@ function changedFiles() {
   const base = process.env.BASE_SHA;
   const head = process.env.HEAD_SHA;
   if (!base || !head) return [];
-  const out = execFileSync('git', ['diff', '--name-status', '--diff-filter=ACMRT', `${base}...${head}`],
+  const out = execFileSync('git', ['diff', '--name-status', '--diff-filter=ACDMRT', `${base}...${head}`],
     { encoding: 'utf8' });
   // 保留状态位：'A' 新增 vs 'M' 修改，决定 r_prefixAvailable 是否查占用。
   // R（重命名）折算成 A —— 改前缀等于申请一个新名字。
+  // D（删除）必须纳入：删除申请文件即释放前缀，需要 r_deleteOwnOnly 鉴权。
+  // 曾经这里排除 D，导致删除对整套规则不可见，可静默释放他人前缀。
   return out.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
     const [st, ...rest] = l.split(/\t/);
     const path = rest[rest.length - 1];
@@ -120,15 +122,26 @@ const filePath = applications[0].path;
 const changeKind = applications[0].kind;
 let doc = null;
 let parseError = null;
-try {
-  doc = JSON.parse(readFileSync(filePath, 'utf8'));
-} catch (err) {
-  parseError = err.message;
+if (changeKind === 'D') {
+  // 文件已不在工作区，从 base 读原内容 —— 鉴权要看被删记录里的 owner.github，
+  // 没有它就无法区分"自助释放"和"删他人记录"。
+  try {
+    doc = JSON.parse(execFileSync('git', ['show', `${process.env.BASE_SHA}:${filePath}`],
+      { encoding: 'utf8' }));
+  } catch (err) {
+    parseError = `无法从 base 读取被删文件：${err.message}`;
+  }
+} else {
+  try {
+    doc = JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    parseError = err.message;
+  }
 }
 
 let challenge = { verified: false, reason: '未执行' };
 let challengeToken = null;
-if (doc) {
+if (doc && changeKind !== 'D') {
   const { prefix } = parsePath(filePath);
   const allowlisted = doc?.record?.type === 'CNAME'
     && isAllowlistedCname(doc.record.value, state.cnameAllowlist);
@@ -146,6 +159,7 @@ const report = doc
       ...runRules({
         filePath, doc, actor, changedFiles: files, state, actorMeta,
         changeKind, challengeVerified: challenge.verified,
+        authorAssociation: process.env.PR_AUTHOR_ASSOCIATION ?? '',
       }),
       file: filePath,
       actor,

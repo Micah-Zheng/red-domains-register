@@ -15,6 +15,13 @@ const base = (o = {}) => ({
   ...o,
 });
 
+// 删除路径的公共 override：走真实存在的 smoketest.json，与 CI 实际情形一致。
+const DEL = {
+  filePath: 'domains/tcp.red/smoketest.json',
+  changedFiles: ['domains/tcp.red/smoketest.json'],
+  changeKind: 'D',
+};
+
 const run = (doc, over = {}) => runRules({
   filePath: 'domains/tcp.red/myblog.json', doc, actor: 'Micah-Zheng',
   changedFiles: ['domains/tcp.red/myblog.json'], state, actorMeta: meta,
@@ -69,6 +76,30 @@ const cases = [
   // —— PR 边界
   ['夹带脚本文件', run(base(), { changedFiles: ['domains/tcp.red/myblog.json', 'scripts/cf-sync.mjs'] }), 'REJECT', 'A'],
   ['一 PR 两个前缀', run(base(), { changedFiles: ['domains/tcp.red/a.json', 'domains/tcp.red/b.json'] }), 'REJECT', 'A'],
+
+  // —— 删除 / 释放前缀（changeKind 'D'）
+  // doc 来自 base 分支的原文件，鉴权只看其中的 owner.github。
+  ['释放自己的前缀', run(base(), { ...DEL }), 'REVIEW', 'A'],
+  ['删他人的前缀', run(base({ owner: { github: 'someoneelse', contact_hash: HASH } }), { ...DEL }), 'REJECT', 'A'],
+  ['运营者代删他人前缀', run(base({ owner: { github: 'someoneelse', contact_hash: HASH } }),
+    { ...DEL, authorAssociation: 'OWNER' }), 'REVIEW', 'A'],
+  ['外部贡献者伪称 OWNER 无效', run(base({ owner: { github: 'someoneelse', contact_hash: HASH } }),
+    { ...DEL, authorAssociation: 'CONTRIBUTOR' }), 'REJECT', 'A'],
+  ['删除时缺 actor', run(base(), { ...DEL, actor: '' }), 'REJECT', 'A'],
+  // 删除不该被"申请内容"类规则拦住 —— 被删的记录本来就在库里，无需重新合规。
+  ['删除保留词记录不被 notReserved 拦', run(base(),
+    { ...DEL, filePath: 'domains/tcp.red/api.json', changedFiles: ['domains/tcp.red/api.json'] }), 'REVIEW', 'A'],
+  ['删除时占位 description 不拦', run(base({ description: 'test site' }), { ...DEL }), 'REVIEW', 'A'],
+  ['删除时挑战未过不拦', run(base(), { ...DEL, challengeVerified: false }), 'REVIEW', 'A'],
+  // 但结构性边界仍然生效：删除 PR 同样不许夹带其他文件。
+  ['删除夹带 workflow 文件', run(base(),
+    { ...DEL, changedFiles: ['domains/tcp.red/smoketest.json', '.github/workflows/03-cf-sync.yml'] }), 'REJECT', 'A'],
+
+  // —— 运营者配额豁免（速率豁免，持有量不豁免）
+  ['运营者 24h 内 5 个 PR 不限速', run(base(),
+    { actorMeta: { ...meta, prCount24h: 5 }, authorAssociation: 'OWNER' }), 'PASS', 'A'],
+  ['运营者仍受全局涌入阈值约束', run(base(),
+    { actorMeta: { ...meta, globalNew24h: 80 }, authorAssociation: 'OWNER' }), 'REVIEW', 'A'],
 ];
 
 let pass = 0, fail = 0;
