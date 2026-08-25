@@ -9,7 +9,7 @@
   },
   "scripts": {
     "validate": "node scripts/validate.mjs",
-    "test": "node tests/validate.e2e.mjs && node tests/protect.e2e.mjs && node tests/derive.e2e.mjs && node tests/workflow-boundary.e2e.mjs && node tests/report-contract.e2e.mjs && node tests/env-contract.e2e.mjs && node tests/notify-contract.e2e.mjs && node tests/delete-path.e2e.mjs && node tests/verify-gate.e2e.mjs",
+    "test": "node tests/validate.e2e.mjs && node tests/protect.e2e.mjs && node tests/derive.e2e.mjs && node tests/workflow-boundary.e2e.mjs && node tests/report-contract.e2e.mjs && node tests/env-contract.e2e.mjs && node tests/notify-contract.e2e.mjs && node tests/delete-path.e2e.mjs && node tests/verify-gate.e2e.mjs && node tests/cooldown.e2e.mjs",
     "test:validate": "node tests/validate.e2e.mjs",
     "test:protect": "node tests/protect.e2e.mjs",
     "snapshot": "node scripts/snapshot-legacy.mjs",
@@ -23,7 +23,8 @@
     "test:delete": "node tests/delete-path.e2e.mjs",
     "test:verify": "node tests/verify-gate.e2e.mjs",
     "verify:dns": "node scripts/verify-dns.mjs",
-    "check:dnssec": "node scripts/check-dnssec.mjs"
+    "check:dnssec": "node scripts/check-dnssec.mjs",
+    "test:cooldown": "node tests/cooldown.e2e.mjs"
   },
   "dependencies": {
     "ajv": "8.20.0",
