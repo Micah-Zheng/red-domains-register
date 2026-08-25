@@ -51,6 +51,8 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          # 由 GitHub 计算，提交者无法伪造 —— r_deleteOwnOnly 的代删鉴权依据。
+          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
           REPORT_PATH: report.json
           CHALLENGE_SALT: ${{ vars.CHALLENGE_SALT }}
         run: node scripts/ci-validate.mjs
