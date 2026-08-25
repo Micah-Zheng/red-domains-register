@@ -64,6 +64,37 @@ jobs:
           node scripts/reconcile.mjs $args
         continue-on-error: true
 
+      # DNSSEC 信任链一致性。放在对账里，因为它是同一类工作：比对「声明」与
+      # 「现实」。两个域在 DNSPod 上开着 clientUpdateProhibited，该锁会挡住注册局
+      # 侧一切更新（**含 DS**）；而 zone 用 CF 托管 DNSSEC。若 CF 轮换 KSK 而新 DS
+      # 推不上去，信任链断裂 —— 后果不是某条记录不解析，而是两个域对所有验证型
+      # 解析器整体 SERVFAIL。它比记录漂移隐蔽得多：面板正常、对账正常、不校验的
+      # 解析器也正常，只有真实用户打不开。
+      - name: DNSSEC 信任链检查
+        id: dnssec
+        env:
+          DNSSEC_ZONES: tcp.red,udp.red
+        run: node scripts/check-dnssec.mjs
+        continue-on-error: true      # 不阻断对账主流程，但下面会开 issue
+
+      - name: 信任链异常则提醒
+        if: always() && steps.dnssec.outcome == 'failure' && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create --repo "$REPO" \
+            --title "DNSSEC 信任链异常 —— 可能导致整域解析失败" \
+            --body "$(printf '%s\n' \
+              '每日检查发现注册局的 DS 与 zone 当前的 KSK 对不上，或 DS 已消失。' '' \
+              '**影响面**：所有开启 DNSSEC 校验的解析器（含 1.1.1.1 / 8.8.8.8 与多数 ISP 递归）' \
+              '会拒绝解析本域 —— 相当于整域下线，而面板、对账、不校验的解析器都显示正常。' '' \
+              '**最可能的原因**：Cloudflare 轮换了 KSK，而注册商（DNSPod）的' \
+              '`clientUpdateProhibited` 锁挡住了 DS 更新。' '' \
+              '**处置**：DNSPod 解锁 → 用 CF 面板给出的新 DS 更新注册局 → 重新加锁。' '' \
+              "运行记录：$RUN_URL")"
+
       - name: 上传对账报告
         if: always()
         uses: actions/upload-artifact@v7

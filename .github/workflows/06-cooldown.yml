@@ -1,0 +1,62 @@
+# 前缀释放 → 写入冷却名单。
+#
+# 独立成一个 workflow 而不是塞进 03-deploy：下发那一段持有 CF_API_TOKEN 与
+# RESEND_API_KEY，并刻意用 persist-credentials: false 断掉写仓库的能力。
+# 往里加一个需要 contents: write 的提交步骤会削弱那条边界。
+#
+# 不会与 03 形成循环：本 workflow 只改 data/cooldown.json，而 03 的 paths 是
+# domains/** / data/infra-records.json / scripts/derive.mjs / scripts/cf-sync.mjs，
+# 都不包含它。本 workflow 自身也只在 domains/** 变化时触发。
+
+name: 06 · 前缀冷却
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'domains/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cooldown-write      # 串行：两次并发写会互相覆盖 entries 数组。
+  cancel-in-progress: false
+
+jobs:
+  cooldown:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 需要读 base 的文件内容（被删的申请已不在工作区），且要能提交回来。
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: 写入冷却名单
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          COOLDOWN_PATH: data/cooldown.json
+          COOLDOWN_REASON: voluntary
+        run: node scripts/cooldown.mjs
+
+      - name: 提交变更
+        run: |
+          if git diff --quiet -- data/cooldown.json; then
+            echo "冷却名单无变化，不提交。"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/cooldown.json
+          git commit -m "冷却：${{ github.sha }} 释放的前缀入名单
+
+自动写入。前缀被释放后不立即回池，等 release_at 过后才可再申请 ——
+旧域名可能仍存在于书签、第三方白名单、已发出的邮件链接与搜索索引里，
+立刻转给下一个人等于把这些残留流量交给陌生人。"
+          git push

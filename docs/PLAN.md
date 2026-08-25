@@ -734,6 +734,26 @@ on:
 （主记录 + 按档位决定的 CAA + 可选挑战 CNAME）再比对，
 而不是只比对主记录、把其余一律视为多余。
 
+### 9.3 DNSSEC 信任链检查（每日，随对账）
+
+两个域在注册商（DNSPod / 腾讯云）上开着 `clientTransferProhibited` 与
+`clientUpdateProhibited`。转移锁是纯收益。**更新锁则与 CF 托管的 DNSSEC 构成
+一个隐蔽的组合风险**：该锁会挡住注册局侧对域名对象的一切更新，其中**包括 DS
+记录**。若 Cloudflare 轮换 KSK 而新 DS 推不上去，信任链断裂。
+
+后果的量级值得写清楚：这不是「某条记录不解析」，而是**两个域对所有开启 DNSSEC
+校验的解析器整体 SERVFAIL** —— 含 `1.1.1.1`、`8.8.8.8` 与多数 ISP 递归，也就是
+绝大多数真实用户。而它比记录漂移隐蔽得多：DNS 记录本身完好，面板正常，对账
+正常，不做校验的解析器也正常。运营者自己 `dig` 很可能一切如常，用户却全都打不开。
+
+`scripts/check-dnssec.mjs` 随每日对账运行：从注册局取 DS，从 zone 权威取 DNSKEY，
+按 RFC 4034 附录 B **自行计算 key tag** 再比对（不是字符串比较），不一致即开高危
+Issue。刻意**不只问 Cloudflare** —— 被检查的一方不应同时当裁判，故以 Google 的
+解析器为准并与 Cloudflare 交叉比对，两者不一致时同样视为可疑。
+
+处置路径固定：DNSPod 解锁 → 用 CF 面板给出的新 DS 更新注册局 → 重新加锁。
+**两个锁都建议保留**，防劫持的价值远大于这点麻烦 —— 前提是有东西盯着 DS。
+
 ### 9.2 `liveness.yml` · 每周探测
 
 按 D4 声明的 `check.mode` 分派，**不从 zone 推断协议**：
@@ -779,6 +799,10 @@ inputs:
 1. CF 删除记录 → 验证权威 NS 已不再应答；
 2. `suspend` → JSON 保留 + `state=SUSPENDED`；`revoke` → 移入 `revoked/<prefix>.json`；
 3. `cooldown: true` → 写 `data/cooldown.json`（含 `release_at`），**孪生前缀一并冷却**；
+   自助释放（用户删除自己的申请文件）已由 `06-cooldown.yml` + `scripts/cooldown.mjs`
+   自动写入，按 `voluntary` 取 30 天。滥用类撤销的 180 天仍走人工路径 ——
+   滥用性质无法从一次 push 推断，不能自动化。冷却只延长不缩短，否则
+   「反复申请-释放」就成了绕过冷却的手段。
 4. 从侧仓读邮箱 → 发 `takedown.html`（含申诉入口与期限）；
 5. 开 Issue 归档：前缀、原因、证据链接、操作人、时间戳。
 

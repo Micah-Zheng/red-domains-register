@@ -43,3 +43,32 @@ export function newlyAddedApps({ before, after = 'HEAD', cwd } = {}) {
   }
   return { skipped: null, apps };
 }
+
+/**
+ * 本次 push 删除（--diff-filter=D）的申请文件。
+ * 内容必须从 base 取 —— 文件已不在工作区，而冷却期需要知道被释放的是谁的前缀。
+ * 同样绝不把失败降级成空数组：算不出来就抛，否则前缀会被静默地立即回池。
+ */
+export function deletedApps({ before, after = 'HEAD', cwd } = {}) {
+  if (!before || /^0+$/.test(before)) {
+    return { skipped: '无 before SHA（首次推送或强推），跳过', apps: [] };
+  }
+  let out;
+  try {
+    out = execFileSync('git', ['diff', '--name-status', '--diff-filter=D', before, after, '--', 'domains/'],
+      { encoding: 'utf8', cwd });
+  } catch (e) {
+    throw new Error(`无法计算本次 push 删除的申请（${before}..${after}）：${e.message}`);
+  }
+  const apps = [];
+  for (const line of out.trim().split('\n').filter(Boolean)) {
+    const file = line.split(/\t/).pop();
+    const parsed = parseAppPath(file);
+    if (!parsed) continue;
+    let doc = null;
+    try { doc = JSON.parse(execFileSync('git', ['show', `${before}:${file}`], { encoding: 'utf8', cwd })); }
+    catch { /* base 里就是坏 JSON —— 仍要冷却该前缀，只是拿不到 owner */ }
+    apps.push({ file, ...parsed, doc });
+  }
+  return { skipped: null, apps };
+}
