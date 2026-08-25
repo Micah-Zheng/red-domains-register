@@ -39,6 +39,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # 通知步骤要跑 `git diff <event.before>..<sha>` 找出本次新增的申请。
+          # 默认浅克隆（depth 1）里 before SHA 不存在，git 报 "fatal: bad object"，
+          # 开通邮件会全部静默跳过。取全量历史；本仓库体量下成本可忽略。
+          fetch-depth: 0
 
       - uses: actions/setup-node@v7
         with:

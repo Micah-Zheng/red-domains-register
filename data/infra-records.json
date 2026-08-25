@@ -41,7 +41,7 @@
       "managed_by": "manual",
       "owner": "证书策略",
       "reference": "PLAN.md §8.4",
-      "$comment": "zone apex 的 CAA。CA 签发时树形上溯取最近祖先（RFC 8659），apex 这条决定谁能给 *.tcp.red 签证书，必须允许 Cloudflare 的 Universal SSL 通配签发（digicert.com / letsencrypt.org / pki.goog / sectigo.com / ssl.com）。摘掉它等于放开全域签发策略。"
+      "$comment": "zone apex 的 CAA。CA 签发时树形上溯取最近祖先（RFC 8659），apex 这条决定谁能给 *.tcp.red 签证书，必须允许 Cloudflare 的 Universal SSL 通配签发（digicert.com / letsencrypt.org / pki.goog / sectigo.com / ssl.com）。摘掉它等于放开全域签发策略。2026-08-25 实建：此前本条只存在于本白名单里，Cloudflare 中为空，即『声称 permanent 的基础设施从未被创建』。现已按上述五家逐 CA 建成 issue + issuewild 各 5 条（每 CA 一条记录，不可把多个 CA 拼进一个值 —— 那不是合法的 issuer-domain-name）。实测 CF 会在应答时并入自己的 CA 集合（comodoca.com、cansignhttpexchanges 参数），故权威返回条数多于本白名单。另注意：叶子 CAA 不能与 CNAME 共存，A 档名字的签发策略实际由这一条承担，见 PLAN §8.4。"
     },
     {
       "name": "*",
@@ -55,7 +55,7 @@
       "managed_by": "manual",
       "owner": "证书策略",
       "reference": "PLAN.md §8.4、M0 item 7",
-      "$comment": "通配名字上的 CAA。与 apex 一并构成默认证书策略。注意：这条是 zone 级基础设施，与『每个前缀随主记录下发的 CAA』不是同一回事，后者由申请文件按档位推导（见下方 derived_records）。"
+      "$comment": "通配名字上的 CAA。与 apex 一并构成默认证书策略。注意：这条是 zone 级基础设施，与『每个前缀随主记录下发的 CAA』不是同一回事，后者由申请文件按档位推导（见下方 derived_records）。执行力有限：DNS 通配只对『不存在的名字』合成，任何已有记录的名字都不会命中它（RFC 4592），所以它管不到任何真实申请。保留本条仅为对账豁免，尚未在 CF 中创建。"
     },
     {
       "name": "_acme-challenge",
@@ -281,12 +281,12 @@
         "type": "CAA",
         "source": "按档位推导",
         "tiers": {
-          "A": "下发 `0 issue \";\"` + `0 issuewild \";\"`",
-          "B": "同 A 档，配额消耗结构性为零",
-          "C": "不下发阻挡性 CAA，否则用户无法签证书",
+          "A": "**不下发**。A 档主记录恒为 CNAME，而 CNAME 不得与任何其它类型共存（RFC 1034 §3.6.2、RFC 2181 §10.1）；写下去会让整个名字不解析。签发策略由 zone apex 的 CAA 承担。",
+          "B": "主记录为 A / AAAA / SRV 时下发 `0 issue \";\"` + `0 issuewild \";\"`；主记录为 CNAME 时同 A 档，不下发。",
+          "C": "不下发阻挡性 CAA，否则用户无法签证书。",
           "D": "不支持（经 CF 转发全端口 TCP/UDP，D7）"
         },
-        "$comment": "档位切换（B→C 或 C→B）须同步增删该记录。漏掉的后果：B 档配额保护静默失效，且无任何报错。四档定义见 D7 与 §8.4。"
+        "$comment": "判据是**主记录类型**，不只是档位：CNAME 一律不下发同名 CAA。Cloudflare 的 API 不拦这种写入（三条全返回 success:true），但权威解析层只应答 CAA、静默丢弃 CNAME —— 下发日志全绿、对账判定『已一致』、而名字根本不解析。2026-08-25 实测 micah-pages / smoketest 均因此不可用，删掉叶子 CAA 后当场恢复。档位切换（B→C 或 C→B）若主记录是 A/AAAA/SRV 仍须同步增删该记录；漏掉的后果是配额保护静默失效且无任何报错。四档定义见 D7 与 §8.4。"
       },
       {
         "record": "_acme-challenge.<prefix>",
