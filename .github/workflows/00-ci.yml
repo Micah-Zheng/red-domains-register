@@ -1,0 +1,64 @@
+# 阶段 ⓿：仓库自身代码的回归测试。
+#
+# 存在的理由：阶段 ① 的 npm test 只在 `paths: domains/**` 命中时才跑，也就是
+# 只有申请类 PR 会被测。改 scripts/ 或 tests/ 的维护类 PR 反而完全没有 CI ——
+# 校验器、AI 分流、凭据边界断言这些决定闸门是否有效的代码，改坏了也是零 check
+# 直接合并。本段就是补这个缺口：谁改了闸门，谁就得先证明闸门还在。
+#
+# 与阶段 ① 同样的安全姿态：本段会执行 PR 里可控的测试代码，因此零凭据、只读
+# 权限。用 pull_request（不是 pull_request_target）—— fork 的 pull_request 里
+# secrets 全为空，即便 PR 内含恶意脚本也无凭据可偷。
+
+name: 00 · 仓库回归测试
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'schema/**'
+  push:
+    branches: [main]
+
+permissions:
+  contents: read          # 只读。本段不贴评论、不打标签、不下发。
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      # 与阶段 ① 一致：锁文件即事实，且关掉安装期钩子。PR 能改 package.json，
+      # 没有理由让它在 CI 里执行任意安装脚本。
+      - name: 安装依赖
+        run: npm ci --ignore-scripts
+
+      # 语法先行：任一脚本解析失败就没必要往下跑，且报错比测试栈更直白。
+      - name: 语法检查
+        run: |
+          fail=0
+          for f in scripts/*.mjs tests/*.mjs; do
+            node --check "$f" || { echo "::error file=$f::语法错误"; fail=1; }
+          done
+          exit $fail
+
+      # 全量 e2e。含 workflow-boundary（扫本目录所有 .yml 断言凭据边界）与
+      # env-contract —— 新增或改动 workflow 时，这两条是主要的防线。
+      - name: 回归测试
+        run: npm test
