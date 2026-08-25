@@ -102,18 +102,33 @@ Cloudflare API"这条路在 fork 场景根本走不通。但顺手换成 `pull_r
 阶段 ② 用 `workflow_run` 而非 `pull_request_target`：它天然运行在主干上下文，
 能直接读阶段 ① 的 artifact，从机制上消除了"顺手 checkout"的可能。脚本本体永远来自 `main`。
 
-### C2 · 必须提交 Public Suffix List（M0 前置，有外部等待期）
+### C2 · Public Suffix List 是必达项，但不是起点
 
-向 `publicsuffix/list` 的 PRIVATE 段提交 PR，同时收录 `tcp.red` 与 `udp.red`。
+`tcp.red` / `udp.red` 未被 PSL 收录，两个后果都无法靠加机器解决：
 
-未收录的两个后果，都无法靠加机器解决：
-- **Let's Encrypt 速率限制按注册域计**：`*.tcp.red` 下所有用户共享 **50 证书 / 7 天**。
-  几十个活跃用户就会互相打死，新用户永远签不出证书。
 - **Cookie 与 HSTS 作用域不隔离**：`evil.tcp.red` 能对 `.tcp.red` 写 cookie，
-  形成 supercookie 与会话固定攻击面，并能对整个后缀污染 HSTS 状态。
+  形成 supercookie 与会话固定攻击面，并能污染整个后缀的 HSTS 状态。**无法用 DNS 手段缓解。**
+- **CA 速率限制按注册域计**：`*.tcp.red` 下自行签证书的用户共享 Let's Encrypt
+  的 50 证书 / 7 天配额。
 
-生效需数周到数月（随浏览器版本发布、ACME 端跟随）。**这是全项目最长的关键路径，
-必须与购买域名同批启动，且在开放申请前已提交。**
+**但收录不能作为第一步。** PSL 的 PRIVATE 段明确拒收 sandbox / test / beta /
+探索性项目，并声明"用户数不到数千的请求很可能被拒"——尚未开放申请的项目正落在此列。
+同时要求提交日起算到期日 **> 2 年**（现为 2027-02-14，仅剩约 0.47 年，不满足）。
+
+因此正确时序是**先续费 → 小规模运营 → 攒到真实用量 → 再提交**，
+而非原先设想的"开放申请前必须已提交"。
+
+窗口期的处置：
+- **默认 `proxied: true`**。走 CF 代理由 Universal SSL 通配证书覆盖，
+  不触发按名字的 LE 签发，因此不消耗注册域配额。窗口期内
+  DNS-only + 自签证书的申请应转人工并计数——`proxied` 因此是配额闸门，不只是性能选项。
+- Cookie 隔离缺失只能**如实披露**，`TERMS.md` 须明写禁止用于登录态与支付等敏感用途。
+- 刻意控制增长节奏，使将来提交时的用量数据真实可陈述。
+
+期限承诺（须保持始终 > 1 年剩余，否则可能被自动移除）把域名从"每年可放弃的支出"
+变成**不可中断的多年滚动承诺**，§14 已据此修订。
+
+完整核实结果、提交流程与检查清单见 **[`PSL.md`](./PSL.md)**。
 
 ### C3 · 前缀强制单层 ASCII
 
@@ -688,15 +703,21 @@ Fork → 新增 `domains/<zone>/<prefix>.json` → 提 PR（**一个 PR 只加�
 
 按依赖排序。M0 有外部等待期，必须最先启动。
 
-### M0 · 前置项（含最长关键路径）
-1. **提交 PSL PR**（C2）—— 数周到数月生效，**开放申请前必须已提交**。
-2. 购买 / 确认 `tcp.red` + `udp.red`；CF 接管 NS 并开启 DNSSEC。
-3. 配置 `notify.tcp.red` 的 SPF / DKIM / DMARC。
+### M0 · 前置项
+1. **续费 `tcp.red` + `udp.red` 至 2029-02-14**，开启自动续费与注册商锁。
+   当前到期 2027-02-14，不满足 PSL 的 2 年门槛（C2）。**唯一的紧急项。**
+2. NS 已在 Cloudflare（已确认），开启 DNSSEC。
+3. 配置 `notify.tcp.red` 的 SPF / DKIM / DMARC，确认 `abuse@tcp.red` 可收信。
 4. 创建 zone-scoped CF token、Resend key、`PEPPER`、`CHALLENGE_SALT`，
    全部放入受保护的 `production` Environment。
-5. 撰写 `TERMS.md`（禁止用途、无 SLA、回收规则、`abuse@tcp.red` 与 24h 响应承诺）。
+5. 撰写 `TERMS.md`：禁止用途、无 SLA、回收规则、`abuse@tcp.red` 与 24h 响应承诺，
+   **并明确披露未收录 PSL 期间同级子域无 cookie / HSTS 隔离**（C2）。
 6. 初始化 `data/reserved.json`：基础设施字（`www` `mail` `ns1` `api` `cdn` `admin` …）、
    主流品牌词、**1~3 字符全量池**（D5）。
+7. `data/infra-records.json` 白名单预置 `_psl.*`（见 PSL.md 步骤 3 的自伤路径说明）。
+
+> **PSL 提交不在 M0**。它要求服务已在运营且有真实用量，属 M4 之后的独立里程碑，
+> 详见 [`PSL.md`](./PSL.md)。
 
 ### M1 · 最小可用闭环（先不上 AI）
 7. `schema/domain.schema.json` + `scripts/validate.mjs` + `01-validate.yml`。
@@ -718,6 +739,12 @@ Fork → 新增 `domains/<zone>/<prefix>.json` → 提 PR（**一个 PR 只加�
 17. `SKILL.md`、README、CF Pages 状态页（已注册列表 + 配额余量 + 冷却中前缀）。
 18. **每周自动统计 Issue**（新增 / 拒绝 / 转人工 / stale / 撤销）——
     这是唯一能发现"AI 通过率突然飙升"这类异常的信号。
+
+
+### M5 · 提交 PSL（独立里程碑，需前置用量）
+19. 统计活跃域名数、独立用户数、解析量作为 PR 论据。
+20. 按 [`PSL.md`](./PSL.md) 流程提交，先开 PR 再按 PR 号设置两条 `_psl` TXT。
+21. 合并后**永久保留** TXT 记录；下游跟随无法加速。
 
 ---
 
@@ -747,6 +774,7 @@ Fork → 新增 `domains/<zone>/<prefix>.json` → 提 PR（**一个 PR 只加�
 | 模块 | 服务 | 成本 |
 | :--- | :--- | :--- |
 | 域名 | `tcp.red` + `udp.red` | **约 $10–20 / 年 / 个**（`.red` 续费价随注册商浮动，需自查） |
+| 域名期限承诺 | PSL 要求始终 > 1 年剩余 | **不可中断的多年滚动支出**，非"每年可放弃" |
 | DNS | Cloudflare Free | $0 |
 | CI/CD | GitHub Actions（**公开**仓库） | $0 无限分钟 |
 | AI 分流 | Gemini 2.5 Flash + Claude Haiku 4.5 | 近 $0（免费额度内） |
@@ -755,7 +783,8 @@ Fork → 新增 `domains/<zone>/<prefix>.json` → 提 PR（**一个 PR 只加�
 | 私有侧仓 | GitHub Private Repo | $0 |
 | **合计** | | **约 $20–40 / 年**，全部是域名续费 |
 
-不存在"永久免费"：域名续费是刚性支出。且 Actions 的无限免费分钟数**仅限公开仓库**——
+不存在"永久免费"：域名续费是刚性支出，且被 PSL 的期限承诺（C2）锁定为**多年连续义务**——
+剩余期限掉到 1 年以下可能触发 PSL 自动移除，届时 cookie 隔离随之失效。且 Actions 的无限免费分钟数**仅限公开仓库**——
 这正是 D3 坚持"公开主干 + 极小私有侧仓"的成本动因。
 
 ---
