@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: read
+  issues: write        # §8.3：权威未应答时开 Issue 留痕
 
 concurrency:
   group: deploy-dns          # 绝不并发：两个下发同时跑会互相覆盖 diff 结果。
@@ -68,8 +69,37 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: node scripts/cf-sync.mjs . --apply
 
-      # 通知放在下发之后：先保证 DNS 真的生效，再告诉用户「可以用了」。
-      # 反过来会让用户收到邮件却解析不到，是最常见的体验投诉来源。
+      # —— §8.3 闸门：CF API 返回 200 不等于权威已应答。
+      # 2026-08-25 实际发生过：API success:true、面板有记录、cf-sync 判「已一致」、
+      # 对账报「孤儿 0」，而权威 NS 一律 NODATA —— 11 条新记录只有 1 条真正下发，
+      # 持续约一小时。整条流水线全绿而域名不解析，用户却会收到「已开通」邮件。
+      # 本步骤直接问 zone 的权威 NS（不问公共解析器，它有正负缓存），
+      # 超时未应答即失败：job 变红、开 Issue、且下面的通知步骤不会执行。
+      - name: 验证权威已应答
+        id: verify
+        if: github.event_name == 'push'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          VERIFY_REPORT: verify-report.json
+          # 3 分钟足够覆盖正常传播（实测秒级），又不会在上游故障时把 job
+          # 拖到 timeout-minutes: 20。故障时快速失败、开 Issue、留待重跑，
+          # 比让下发卡住二十分钟更有用。
+          VERIFY_TIMEOUT_MS: '180000'
+          VERIFY_INTERVAL_MS: '10000'
+        run: node scripts/verify-dns.mjs
+
+      - name: 未生效 · 开 Issue
+        if: failure() && steps.verify.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERIFY_REPORT: verify-report.json
+        run: node scripts/deploy-issue.mjs
+
+      # 通知放在验证之后：先确认权威真的在应答，再告诉用户「可以用了」。
+      # 反过来会让用户收到邮件却解析不到 —— §8.3 称之为最差的失败模式。
       - name: 发送开通通知
         if: success() && github.event_name == 'push'
         env:
@@ -81,5 +111,6 @@ jobs:
           MAIL_FROM: ${{ vars.MAIL_FROM }}
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.sha }}
+          VERIFY_REPORT: verify-report.json
         run: node scripts/notify.mjs
         continue-on-error: true    # 邮件失败不该让已成功的 DNS 下发显示为红。

@@ -7,39 +7,31 @@
 //
 // 未配置私有存储时静默跳过而非报错：邮件是增值功能，DNS 已经生效了。
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { newlyAddedApps } from './changed-apps.mjs';
 
 const RESEND = process.env.RESEND_API_KEY;
 const STORE = process.env.CONTACT_STORE_TOKEN;
-const before = process.env.BEFORE_SHA;
-const after = process.env.AFTER_SHA ?? 'HEAD';
 const FROM = process.env.MAIL_FROM ?? 'tcp.red <noreply@send.notify.tcp.red>';
 const CONTACT_STORE_REPO = process.env.CONTACT_STORE_REPO ?? 'red-domains-contacts';
+const VERIFY_REPORT = process.env.VERIFY_REPORT ?? 'verify-report.json';
 
 if (!RESEND) { console.log('未配置 RESEND_API_KEY，跳过通知。'); process.exit(0); }
 
-/** 本次 push 新增的申请文件。删除和修改不发开通邮件。 */
-function newlyAdded() {
-  if (!before || /^0+$/.test(before)) {
-    console.log('无 before SHA（首次推送或强推），跳过通知以免群发历史条目。');
-    return [];
-  }
-  let out;
-  try {
-    out = execFileSync('git', ['diff', '--name-status', '--diff-filter=A', before, after, '--', 'domains/'], { encoding: 'utf8' });
-  } catch (e) {
-    // 绝不降级成「本次无新增申请」。这里失败最常见的原因是 checkout 浅克隆
-    // （fetch-depth 默认 1）导致 before SHA 在 runner 上不存在，git 报
-    // "fatal: bad object"。旧实现 catch 后 return []，日志只留一行「无新增申请，
-    // 无需通知」，于是**每一次**下发的开通邮件都被静默吞掉 —— 加上这一步的
-    // continue-on-error:true，整条通知链路可以长期全绿地什么都不做。
-    throw new Error(
-      `无法计算本次 push 的新增申请（${before}..${after}）：${e.message}\n`
-      + '若是 "bad object"：checkout 深度不够，03-deploy.yml 需要 fetch-depth: 0。');
-  }
-  return out.trim().split('\n').filter(Boolean)
-    .map((l) => l.split('\t')[1]).filter((f) => f?.endsWith('.json'));
+// —— 只给「权威已确认应答」的名字发信（PLAN §8.3）。
+//
+// 报告由 verify-dns.mjs 产出。读不到就**直接失败**，不做「姑且发吧」的降级：
+// 这道闸门存在的全部意义就是防止「用户收到已开通、而域名解析不到」，
+// 一旦允许在缺报告时照发，闸门等于不存在。2026-08-25 的 Cloudflare 故障中，
+// 11 条新记录只有 1 条真正下发，而 API、面板、对账全部显示正常。
+let verifiedSet;
+try {
+  const vr = JSON.parse(readFileSync(VERIFY_REPORT, 'utf8'));
+  verifiedSet = new Set((vr.verified ?? []).map((v) => v.file));
+} catch (e) {
+  throw new Error(
+    `读不到下发验证报告 ${VERIFY_REPORT}：${e.message}\n`
+    + '通知必须在 verify-dns.mjs 之后运行 —— 未经权威确认不得发送开通邮件（PLAN §8.3）。');
 }
 
 /** 用邮箱哈希向私有侧存储换明文地址。 */
@@ -70,26 +62,26 @@ async function resolveEmail(hash) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const files = newlyAdded();
-if (!files.length) { console.log('本次无新增申请，无需通知。'); process.exit(0); }
-console.log(`本次新增 ${files.length} 条，准备通知。`);
+const { skipped: skipReason, apps } = newlyAddedApps({
+  before: process.env.BEFORE_SHA, after: process.env.AFTER_SHA,
+});
+if (skipReason) console.log(skipReason);
+if (!apps.length) { console.log('本次无新增申请，无需通知。'); process.exit(0); }
+console.log(`本次新增 ${apps.length} 条，准备通知。`);
 
 let sent = 0, skipped = 0;
-for (const f of files) {
-  let app;
-  try { app = JSON.parse(readFileSync(f, 'utf8')); } catch { console.log(`  跳过 ${f}（解析失败）`); skipped += 1; continue; }
-  // 前缀与 zone 只存在于路径 domains/<zone>/<prefix>.json 里，申请文件内没有
-  // 这两个字段（schema/domain.schema.json 的 properties 是 description / owner /
-  // record / proxied / ttl / check / tls）。旧实现读 app.prefix、app.zone、
-  // app.contact.emailHash、app.emailHash、app.target —— 五个字段 schema 里一个
-  // 都不存在，于是每条申请都停在「无 emailHash」，一封邮件也发不出去。
-  const m = /^domains\/([^/]+)\/([^/]+)\.json$/.exec(f);
-  if (!m) { console.log(`  跳过 ${f}（路径不是 domains/<zone>/<prefix>.json）`); skipped += 1; continue; }
-  const [, zone, prefix] = m;
+for (const app of apps) {
+  const { file: f, zone, prefix, doc } = app;
   const fqdn = `${prefix}.${zone}`;
 
+  // 未通过权威验证的一律不发。verify-dns.mjs 失败时 workflow 本就不会走到这里，
+  // 这里是第二道保险：万一将来有人把步骤顺序调乱，也不会发出假的开通通知。
+  if (!verifiedSet.has(f)) {
+    console.log(`  跳过 ${fqdn}（权威未确认应答，不发开通通知）`); skipped += 1; continue;
+  }
+
   // 侧存储的文件名是纯 64 位十六进制，不带 `sha256:` 前缀，须剥掉再去换地址。
-  const hash = String(app.owner?.contact_hash ?? '').replace(/^sha256:/, '');
+  const hash = String(doc.owner?.contact_hash ?? '').replace(/^sha256:/, '');
   if (!/^[0-9a-f]{64}$/.test(hash)) {
     console.log(`  跳过 ${fqdn}（owner.contact_hash 缺失或格式不对）`); skipped += 1; continue;
   }
@@ -97,20 +89,37 @@ for (const f of files) {
   const to = await resolveEmail(hash);
   if (!to) { console.log(`  跳过 ${fqdn}（私有存储无此哈希，可能用户已请求删除）`); skipped += 1; continue; }
 
+  const target = doc.record?.value;
+
+  // 文案与结构按「事务性邮件」而非「通知类营销邮件」来写。
+  // 2026-08-25 实测：QQ 邮箱把首封开通邮件归入了「广告」目录（不是垃圾箱，
+  // 说明域名信誉没问题，是内容分类）。已知的分类信号里，纯 HTML 而无
+  // text/plain 副本是最强的一个 —— 正规事务性邮件几乎都是 multipart。
+  // 另外去掉了大标题与灰色小字页脚这类版式，它们是典型的营销版式特征。
+  const text = [
+    `${fqdn} 已开通。`,
+    '',
+    `解析目标：${target}`,
+    '',
+    'DNS 在全球生效通常需要几分钟，如果暂时打不开请稍后再试。',
+    '需要修改或注销，回到仓库提一个新的 PR 即可。',
+    '',
+    '本邮件由自动流程发出，请勿直接回复。',
+  ].join('\n');
+
   const html = `<div style="font-family:system-ui,-apple-system,sans-serif;line-height:1.6;max-width:520px">
-<h2 style="margin:0 0 16px">${esc(fqdn)} 已开通</h2>
-<p>你申请的二级域名已生效，指向 <code>${esc(app.record?.value)}</code>。</p>
-<p>DNS 在全球生效通常需要几分钟。如果暂时打不开，先等一会儿再试。</p>
-<p style="color:#666;font-size:14px">
-需要修改或注销，回到仓库提一个新的 PR 即可。<br>
-本邮件由自动流程发出，请勿直接回复。</p>
+<p>${esc(fqdn)} 已开通。</p>
+<p>解析目标：<code>${esc(target)}</code></p>
+<p>DNS 在全球生效通常需要几分钟，如果暂时打不开请稍后再试。<br>
+需要修改或注销，回到仓库提一个新的 PR 即可。</p>
+<p>本邮件由自动流程发出，请勿直接回复。</p>
 </div>`;
 
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { authorization: `Bearer ${RESEND}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ from: FROM, to, subject: `${fqdn} 已开通`, html }),
+      body: JSON.stringify({ from: FROM, to, subject: `${fqdn} 已开通`, html, text }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 160)}`);
     // 只打印 FQDN，绝不把邮箱地址写进公开的 Actions 日志。

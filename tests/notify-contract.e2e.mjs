@@ -17,23 +17,33 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 let pass = 0; const fails = [];
 const ok = (c, m) => { if (c) { pass++; console.log(`  ok   ${m}`); } else { fails.push(m); console.log(`  FAIL ${m}`); } };
 
-const raw = readFileSync(join(ROOT, 'scripts/notify.mjs'), 'utf8');
+// 「本次新增了哪些申请」的逻辑已抽到 changed-apps.mjs（notify 与 verify-dns
+// 共用同一个事实源）。契约不变，只是要连同该模块一起扫描 —— 否则断言会
+// 因为「在 notify.mjs 里找不到」而假绿。
+const raw = readFileSync(join(ROOT, 'scripts/notify.mjs'), 'utf8')
+  + '\n' + readFileSync(join(ROOT, 'scripts/changed-apps.mjs'), 'utf8');
 // 必须先剥注释再扫描：这些 bug 的说明文字里正好写着那批不存在的字段名
 // （「旧实现读 app.prefix、app.zone……」），不剥就会把注释当成代码报假阳性。
-const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+// 顺序要紧：**先剥行注释，再剥块注释**。反过来会踩坑 —— notify.mjs 的文件头
+// 里有一行 `// ...domains/*.json 里只有邮箱哈希...`，那个 `/*` 位于行注释内部，
+// 但块注释正则不认得这一点，会把它当成块注释开头一路吞到下一个 `*/`，
+// 连带删掉中间上千字符的真实代码。那样断言扫的是一份被啃过的源码，
+// 会毫无征兆地假绿或假红。
+const src = raw.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
 const schema = JSON.parse(readFileSync(join(ROOT, 'schema/domain.schema.json'), 'utf8'));
 const top = new Set(Object.keys(schema.properties));
 
 console.log('=== notify.mjs 读的字段必须在 schema 里 ===');
 // 申请文件被解析进变量 app，取它的一级属性名（含可选链）。
-const read = [...src.matchAll(/\bapp\??\.\s*(\w+)/g)].map((m) => m[1]);
-ok(read.length > 0, `在 notify.mjs 中找到 ${read.length} 处 app.<字段> 读取`);
+// 申请文件被解析进 doc（notify）或 app.doc（changed-apps），两种写法都要扫。
+const read = [...src.matchAll(/\b(?:doc|app\.doc)\??\.\s*(\w+)/g)].map((m) => m[1]);
+ok(read.length > 0, `找到 ${read.length} 处申请文件字段读取`);
 for (const f of [...new Set(read)]) {
   ok(top.has(f), `app.${f} —— schema 定义了 ${f}${top.has(f) ? '' : `（schema 只有：${[...top].join('、')}）`}`);
 }
 
 console.log('\n=== 二级字段 ===');
-const nested = [...src.matchAll(/\bapp\??\.\s*(\w+)\??\.\s*(\w+)/g)];
+const nested = [...src.matchAll(/\b(?:doc|app\.doc)\??\.\s*(\w+)\??\.\s*(\w+)/g)];
 for (const [, parent, child] of nested) {
   const props = schema.properties[parent]?.properties ?? {};
   ok(Object.hasOwn(props, child), `app.${parent}.${child} —— schema 的 ${parent} 定义了 ${child}`);
@@ -47,8 +57,14 @@ ok(/domains\\?\/\(\[\^\/\]\+\)\\?\/\(\[\^\/\]\+\)\\?\.json/.test(src) || /domain
   '前缀与 zone 从文件路径 domains/<zone>/<prefix>.json 解析（schema 里没有这两个字段）');
 ok(/replace\(\/\^sha256:\/,\s*''\)/.test(src),
   'contact_hash 去掉 `sha256:` 前缀再去侧存储换地址（侧存储文件名是纯 64 位十六进制）');
-ok(/throw new Error\(/.test(src.slice(src.indexOf('function newlyAdded'), src.indexOf('/** 用邮箱哈希'))),
+ok(/throw new Error\(/.test(src.slice(src.indexOf('export function newlyAddedApps'))),
   'git diff 失败时抛错而非降级成「本次无新增申请」');
+
+// §8.3：通知必须以权威验证为前提，且缺报告时失败而非放行。
+ok(/VERIFY_REPORT/.test(src), '通知读取下发验证报告');
+ok(/verifiedSet\.has\(/.test(src), '只给权威已确认应答的名字发信');
+ok(/text/.test(src) && /subject:/.test(src),
+  '邮件带 text/plain 副本（纯 HTML 是被归入「广告」目录的主要信号）');
 
 console.log('\n=== 下发 workflow 必须给足 checkout 深度 ===');
 const wf = readFileSync(join(ROOT, '.github/workflows/03-deploy.yml'), 'utf8');
