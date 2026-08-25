@@ -38,12 +38,12 @@ jobs:
       # 只检出主干代码。校验逻辑必须来自 main，不能来自 PR ——
       # 否则提交者改一行 validate.mjs 就能让自己的申请全绿。
       - name: 检出主干
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
