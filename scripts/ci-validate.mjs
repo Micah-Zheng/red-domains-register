@@ -154,7 +154,29 @@ if (doc && changeKind !== 'D') {
   }
 }
 
-const report = doc
+// 删除一条 base 里已经损坏的记录：doc 解析不出来，鉴权无从做起（owner.github
+// 就在坏掉的 JSON 里）。旧行为是落进下面的 r_jsonParse REJECT 分支 —— 结果是
+// 这条记录**谁都删不掉，包括它真正的持有者**，只能由运营者手工改库。
+// 正确处置是转人工而非拒绝：记录本来就已经坏了，让运营者看一眼再决定；
+// 绝不能因为读不到 owner 就自动放行，那等于把鉴权关掉。
+const unparsableDelete = changeKind === 'D' && !doc;
+const report = unparsableDelete
+  ? {
+      verdict: 'REVIEW',
+      file: filePath,
+      actor,
+      actor_meta: actorMeta,
+      findings: [{
+        rule: 'r_deleteUnparsable', verdict: 'REVIEW',
+        message: `${filePath} 在 base 分支上就不是合法 JSON（${parseError}），无法核对 owner.github`,
+        hint: '记录本身已损坏，删除请求转人工：运营者需确认发起者确实是持有者，或确认该记录应当作废',
+      }],
+      changed_files: files,
+      challenge: { verified: false, reason: '删除操作不执行挑战' },
+      doc: null,
+      prNumber: Number(process.env.PR_NUMBER) || undefined,
+    }
+  : doc
   ? {
       ...runRules({
         filePath, doc, actor, changedFiles: files, state, actorMeta,
