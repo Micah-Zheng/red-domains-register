@@ -93,5 +93,32 @@ for (const f of files) {
   }
 }
 
+// —— YAML 结构合法性（不引解析器，只抓一类致命写法）
+//
+// 2026-08-26 实际踩到：06-cooldown.yml 的 `run: |` 块里写了
+// `git commit -m "第一行\n\n第二行"`，后续行顶格。`run: |` 是 YAML 块标量，
+// 靠缩进界定范围，顶格行会提前终止块、随后被当成顶层键解析 —— 整个 workflow
+// 文件非法。GitHub 的表现极具误导性：run 在 0 秒内失败，名字显示成原始文件路径
+// 而不是 workflow 的 name，日志里没有任何一行说「YAML 语法错误」。
+//
+// 上面那些断言全是正则扫描，扫的是文本而非结构，所以一个语法上根本无法运行的
+// workflow 可以让它们全绿。这条补的正是那个盲区。
+console.log('\n=== YAML 结构：块标量内不得出现顶格行 ===');
+for (const f of readdirSync(DIR).filter((x) => x.endsWith('.yml'))) {
+  const lines = readFileSync(join(DIR, f), 'utf8').split('\n');
+  const offenders = [];
+  let seenKey = false;
+  lines.forEach((l, i) => {
+    if (/^[A-Za-z_][\w.-]*\s*:/.test(l)) { seenKey = true; return; }   // 合法顶层键
+    if (!seenKey) return;                                                // 文件头注释等
+    if (l.trim() === '') return;
+    if (/^\s/.test(l)) return;                                          // 有缩进，正常
+    if (/^(#|---|\.\.\.)/.test(l)) return;                              // 注释与文档分隔
+    offenders.push(`${i + 1}:${l.slice(0, 40)}`);
+  });
+  ok(offenders.length === 0,
+    `${f} 无顶格续行${offenders.length ? ` —— 第 ${offenders.join('、')}` : ''}`);
+}
+
 console.log(`\n${pass}/${pass + fails.length} 通过`);
 if (fails.length) { console.log('\n失败项：'); for (const m of fails) console.log(`  · ${m}`); process.exit(1); }

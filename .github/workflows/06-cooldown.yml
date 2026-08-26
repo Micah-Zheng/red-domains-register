@@ -54,9 +54,11 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/cooldown.json
-          git commit -m "冷却：${{ github.sha }} 释放的前缀入名单
-
-自动写入。前缀被释放后不立即回池，等 release_at 过后才可再申请 ——
-旧域名可能仍存在于书签、第三方白名单、已发出的邮件链接与搜索索引里，
-立刻转给下一个人等于把这些残留流量交给陌生人。"
+          # 多行提交说明用重复的 -m，不要在双引号里直接换行：
+          # `run: |` 是 YAML 块标量，靠缩进界定范围，顶格的续行会破坏缩进，
+          # 整个 workflow 文件随之非法。GitHub 的表现是 0 秒失败、run 名字
+          # 显示成原始文件路径而不是 workflow 的 name —— 看起来不像语法错。
+          git commit \
+            -m "冷却：${{ github.sha }} 释放的前缀入名单" \
+            -m "自动写入。前缀被释放后不立即回池，等 release_at 过后才可再申请：旧域名可能仍存在于书签、第三方白名单、已发出的邮件链接与搜索索引里，立刻转给下一个人等于把这些残留流量交给陌生人。"
           git push
