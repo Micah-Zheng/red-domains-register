@@ -1,6 +1,0 @@
-{
-  "description": "个人主页，托管在 GitHub Pages。修复 CAA/CNAME 冲突后用于重跑校验、下发、通知三段的端到端验证。",
-  "owner": { "github": "Micah-Zheng", "contact_hash": "sha256:b6af6b777c422f81c02eec4d2fbc9d98364a881aad13c9cc6c0d7cd4aef8ba06" },
-  "record": { "type": "CNAME", "value": "micahzheng.github.io" },
-  "check": { "mode": "http", "port": 443 }
-}
